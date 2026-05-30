@@ -274,6 +274,6 @@ TAAC2026/
 
 <div align="center">
 
-[⭐ 收藏本仓库](https://github.com/Fe1ixFe1icis/TAAC2026) • [🐛 报告问题](../../issues) • [💡 功能建议](../../issues)
+[⭐ Star Me](https://github.com/Fe1ixFe1icis/TAAC2026) • [🐛 Report Something](../../issues) • [💡 Suggestion](../../issues)
 
 </div>
