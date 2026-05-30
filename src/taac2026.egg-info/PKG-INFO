@@ -1,0 +1,30 @@
+Metadata-Version: 2.4
+Name: taac2026
+Version: 2.0.0
+Summary: TAAC 2026 experiment workspace (Windows)
+License-Expression: MIT
+Classifier: Operating System :: Microsoft :: Windows
+Requires-Python: <3.14,>=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: datasets==2.14.7
+Requires-Dist: loguru==0.7.3
+Requires-Dist: matplotlib==3.10.8
+Requires-Dist: numpy==2.2.5
+Requires-Dist: orjson==3.11.8
+Requires-Dist: pyarrow==23.0.1
+Requires-Dist: pydantic==2.12.5
+Requires-Dist: rich==14.3.3
+Requires-Dist: safetensors==0.7.0
+Requires-Dist: scikit-learn==1.7.2
+Requires-Dist: tensorboard==2.19.0
+Requires-Dist: tomli==2.4.0
+Requires-Dist: tqdm==4.67.3
+Requires-Dist: tyro==1.0.13
+Provides-Extra: dev
+Requires-Dist: hypothesis==6.152.9; extra == "dev"
+Requires-Dist: pytest==9.0.3; extra == "dev"
+Requires-Dist: pytest-benchmark==5.2.3; extra == "dev"
+Requires-Dist: pytest-cov==7.1.0; extra == "dev"
+Requires-Dist: ruff==0.15.13; extra == "dev"
+Requires-Dist: vulture==2.16; extra == "dev"
+Requires-Dist: zensical==0.0.43; extra == "dev"

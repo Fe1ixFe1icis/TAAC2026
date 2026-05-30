@@ -1,0 +1,7 @@
+hypothesis==6.152.9
+pytest==9.0.3
+pytest-benchmark==5.2.3
+pytest-cov==7.1.0
+ruff==0.15.13
+vulture==2.16
+zensical==0.0.43

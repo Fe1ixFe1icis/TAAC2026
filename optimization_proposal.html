@@ -1,0 +1,1024 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PCVRHyFormer 模型结构与算法优化方案</title>
+<style>
+  :root {
+    --primary: #1a237e;
+    --secondary: #283593;
+    --accent: #3949ab;
+    --success: #2e7d32;
+    --warning: #f57c00;
+    --danger: #c62828;
+    --bg: #f5f5f5;
+    --card: #ffffff;
+    --text: #333333;
+    --muted: #666666;
+    --border: #e0e0e0;
+    --code-bg: #263238;
+    --code-fg: #aed581;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+  }
+  h1 {
+    color: var(--primary);
+    border-bottom: 3px solid var(--primary);
+    padding-bottom: 12px;
+    font-size: 2rem;
+    margin-top: 0;
+  }
+  h2 {
+    color: var(--secondary);
+    margin-top: 40px;
+    border-left: 5px solid var(--secondary);
+    padding-left: 15px;
+    font-size: 1.5rem;
+  }
+  h3 {
+    color: var(--accent);
+    margin-top: 25px;
+    font-size: 1.2rem;
+  }
+  h4 { color: var(--text); margin-top: 18px; font-size: 1.05rem; }
+  .card {
+    background: var(--card);
+    border-radius: 10px;
+    padding: 24px;
+    margin: 16px 0;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .tag {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-right: 6px;
+    margin-bottom: 4px;
+  }
+  .tag-high { background: #ffcdd2; color: #b71c1c; }
+  .tag-medium { background: #ffe0b2; color: #e65100; }
+  .tag-low { background: #c8e6c9; color: #1b5e20; }
+  .tag-framework { background: #e3f2fd; color: #0d47a1; }
+  .tag-new { background: #f3e5f5; color: #4a148c; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: 0.95rem;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    text-align: left;
+  }
+  th { background: #e8eaf6; font-weight: 600; }
+  tr:hover { background: #fafafa; }
+  .metric { font-family: 'SF Mono', monospace; background: #f0f0f0; padding: 2px 7px; border-radius: 4px; font-size: 0.9em; }
+  pre {
+    background: var(--code-bg);
+    color: var(--code-fg);
+    padding: 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+  code {
+    font-family: 'SF Mono', monospace;
+    background: #f0f0f0;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 0.9em;
+  }
+  .note {
+    background: #fff8e1;
+    border-left: 4px solid var(--warning);
+    padding: 14px 16px;
+    margin: 14px 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .insight {
+    background: #e8f5e9;
+    border-left: 4px solid var(--success);
+    padding: 14px 16px;
+    margin: 14px 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .bottleneck {
+    background: #ffebee;
+    border-left: 4px solid var(--danger);
+    padding: 14px 16px;
+    margin: 14px 0;
+    border-radius: 0 6px 6px 0;
+  }
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  @media (max-width: 768px) {
+    .two-col { grid-template-columns: 1fr; }
+    body { padding: 12px; }
+  }
+  .toc {
+    background: var(--card);
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 24px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .toc ul { margin: 8px 0; padding-left: 20px; }
+  .toc li { margin: 4px 0; }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .priority-table th { text-align: center; }
+  .priority-table td:nth-child(3),
+  .priority-table td:nth-child(4),
+  .priority-table td:nth-child(5) { text-align: center; }
+  .score { font-weight: bold; }
+  .score-high { color: var(--danger); }
+  .score-medium { color: var(--warning); }
+  .score-low { color: var(--success); }
+  .check { color: var(--success); font-weight: bold; }
+  .cross { color: var(--danger); font-weight: bold; }
+  .summary-box {
+    background: linear-gradient(135deg, #e8eaf6 0%, #c5cae9 100%);
+    border-radius: 10px;
+    padding: 20px;
+    margin: 16px 0;
+  }
+  .summary-box h3 { margin-top: 0; color: var(--primary); }
+</style>
+</head>
+<body>
+
+<h1>PCVRHyFormer 模型结构与算法优化方案</h1>
+<p style="color: var(--muted);">基于 taac2026 框架代码分析与 logs.html 实验日志 | 生成日期: 2026-05-27</p>
+
+<div class="toc card">
+  <strong style="font-size: 1.1rem;">目录</strong>
+  <ul>
+    <li><a href="#sec-baseline">1. 当前基线与实验瓶颈分析</a></li>
+    <li><a href="#sec-attention">2. 注意力机制优化</a></li>
+    <li><a href="#sec-block">3. Block 结构优化</a></li>
+    <li><a href="#sec-interaction">4. 特征交互优化</a></li>
+    <li><a href="#sec-training">5. 训练算法优化</a></li>
+    <li><a href="#sec-sequence">6. 序列编码优化</a></li>
+    <li><a href="#sec-dataset">7. 跨数据集特定优化</a></li>
+    <li><a href="#sec-priority">8. 优先级排序与实施路线图</a></li>
+    <li><a href="#sec-code">9. 关键代码实现参考</a></li>
+  </ul>
+</div>
+
+<!-- ============================ -->
+<h2 id="sec-baseline">1. 当前基线与实验瓶颈分析</h2>
+
+<div class="card">
+<h3>1.1 当前最优配置 (Avazu)</h3>
+<table>
+<tr><th>参数</th><th>最优值</th><th>实验验证结果</th></tr>
+<tr><td>d_model / emb_dim</td><td class="metric">64</td><td>d=64 最优；d=128/256 性能下降（倒U型曲线）</td></tr>
+<tr><td>num_blocks</td><td class="metric">2</td><td>b=2 最优；b=4/8 性能下降</td></tr>
+<tr><td>num_queries</td><td class="metric">1</td><td>受 d_model % T = 0 约束，仅 q=1 可行</td></tr>
+<tr><td>seq_encoder</td><td class="metric">longer + causal</td><td>比 transformer 提升 <span class="metric">+1.2% AUC</span></td></tr>
+<tr><td>rank_mixer_mode</td><td class="metric">none</td><td>full/ffn_only 均无益，none 最优且参数更少</td></tr>
+<tr><td>ns_tokenizer</td><td class="metric">rankmixer (u=1, i=2)</td><td>比 (5,2) 提升 +0.12% AUC</td></tr>
+<tr><td>use_rope</td><td class="metric">False</td><td>对短序列CTR无显著影响</td></tr>
+<tr><td>最终 AUC</td><td class="metric">0.7406</td><td>5000 steps | LogLoss=0.4076 | 2.84M 参数</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>1.2 跨数据集表现</h3>
+<table>
+<tr><th>数据集</th><th>样本数</th><th>AUC</th><th>LogLoss</th><th>特点</th></tr>
+<tr><td>Avazu (基线)</td><td>40.4M</td><td class="metric">0.7406</td><td class="metric">0.4076</td><td>类别特征 + device_id 序列</td></tr>
+<tr><td>Criteo</td><td>45.8M</td><td class="metric">0.7853</td><td class="metric">0.4663</td><td>连续+离散特征，无序列</td></tr>
+<tr><td>Amazon</td><td>7.8M</td><td class="metric">0.6633</td><td class="metric">0.5313</td><td>user-item 交互序列，评分预测</td></tr>
+</table>
+</div>
+
+<div class="bottleneck">
+<strong>核心瓶颈诊断：</strong>
+<ol>
+  <li><strong>容量-数据不匹配：</strong>增加 d_model 或 num_blocks 均导致性能下降，说明当前模型容量与 Avazu 数据量已接近"甜点区"，扩大容量反而过拟合。</li>
+  <li><strong>rank_mixer 失效：</strong>rank mixing 机制在 Avazu 上完全无效，说明特征交互设计需要根本性重新思考。</li>
+  <li><strong>架构刚性约束：</strong>num_queries 受 d_model % T = 0 限制，导致单序列域数据集上无法探索多 query。</li>
+  <li><strong>训练策略保守：</strong>当前使用 AdamW + no scheduler + no EMA，未充分利用框架已支持的高级训练技术。</li>
+  <li><strong>Amazon 表现薄弱：</strong>评分预测任务（5类）明显难于 CTR（2类），序列编码需要针对时序建模加强。</li>
+</ol>
+</div>
+
+<!-- ============================ -->
+<h2 id="sec-attention">2. 注意力机制优化</h2>
+
+<div class="card">
+<h3>2.1 Grouped Query Attention (GQA)</h3>
+<div class="two-col">
+  <div>
+    <h4>原理</h4>
+    <p>将多头注意力中的 K/V 头数减少为 Q 头数的 1/n，在保持表达能力的同时显著降低 KV 缓存和参数量。对于 PCVRHyFormer 的短序列场景，GQA 可以减少约 <span class="metric">20-30%</span> 的注意力参数量。</p>
+  </div>
+  <div>
+    <h4>适用性分析</h4>
+    <p>当前框架的 <code>scaled_dot_product_attention</code> 支持任意 num_heads，只需调整 K/V 的投影维度。适合 Avazu/Criteo 的轻量场景。</p>
+  </div>
+</div>
+<div class="note">
+<strong>实施建议：</strong>添加 <code>num_kv_heads</code> 参数，令 <code>num_kv_heads = num_heads // group_size</code>。K/V 投影从 <code>(d_model, d_model)</code> 变为 <code>(d_model, num_kv_heads * head_dim)</code>。
+</div>
+<span class="tag tag-high">高优先级</span>
+<span class="tag tag-new">新组件</span>
+<span class="tag">预期 AUC 持平 | 参数量 -15%</span>
+</div>
+
+<div class="card">
+<h3>2.2 门控多头注意力 (Gated MHA)</h3>
+<div class="two-col">
+  <div>
+    <h4>原理</h4>
+    <p>在 attention 输出后引入一个可学习的门控：</p>
+    <pre>gate = sigmoid(Linear(x))
+output = gate * attn_output + (1 - gate) * x</pre>
+    <p>允许模型自适应地决定何时依赖注意力、何时保留原始特征。</p>
+  </div>
+  <div>
+    <h4>适用性分析</h4>
+    <p>实验发现 rank_mixer_mode=none 最优，说明模型倾向于"少干预"。门控机制赋予模型选择权，可能比强制 rank mixing 更有效。</p>
+  </div>
+</div>
+<span class="tag tag-medium">中优先级</span>
+<span class="tag tag-new">新组件</span>
+<span class="tag">预期 AUC +0.1~0.3%</span>
+</div>
+
+<div class="card">
+<h3>2.3 线性注意力 / 稀疏注意力</h3>
+<div class="two-col">
+  <div>
+    <h4>原理</h4>
+    <p>将 softmax(QK^T)V 替换为核技巧近似 (phi(Q) phi(K)^T V)，将复杂度从 O(n^2) 降至 O(n)。适合超长序列（如 Amazon 的 max_len=50+）。</p>
+  </div>
+  <div>
+    <h4>适用性分析</h4>
+    <p>Avazu 序列较短（top_k=50），O(n^2) 开销不大。但对于未来可能的长序列场景或更大的 batch，线性注意力可显著加速。框架中的 <code>flash_attention</code> 已支持高效实现，可作为回退。</p>
+  </div>
+</div>
+<span class="tag tag-low">低优先级</span>
+<span class="tag tag-new">新组件</span>
+<span class="tag">预期 训练速度 +20% | AUC 持平</span>
+</div>
+
+<!-- ============================ -->
+<h2 id="sec-block">3. Block 结构优化</h2>
+
+<div class="card">
+<h3>3.1 Pre-LN + RMSNorm 替代 LayerNorm</h3>
+<div class="two-col">
+  <div>
+    <h4>现状</h4>
+    <p>框架已内置 <code>RMSNorm</code>（支持 torch/tilelang/triton 后端），但当前模型可能使用 LayerNorm。实验显示 <code>rank_mixer_mode=none</code> 时使用了 LayerNorm。</p>
+  </div>
+  <div>
+    <h4>优化方向</h4>
+    <p>1. 将所有 LayerNorm 替换为 RMSNorm（减少 bias 参数，提升稳定性）<br>
+       2. 采用 Pre-LN 结构（归一化在残差连接之前），缓解深层网络梯度问题，使 num_blocks>2 时性能不再下降。</p>
+  </div>
+</div>
+<div class="insight">
+<strong>框架就绪度：</strong><span class="check">100%</span> — <code>RMSNorm</code> 已在 <code>taac2026/infrastructure/modeling/normalization.py</code> 中完整实现，仅需在模型中替换调用。
+</div>
+<span class="tag tag-high">高优先级</span>
+<span class="tag tag-framework">框架已支持</span>
+<span class="tag">预期 AUC +0.1~0.2% | 训练稳定性提升</span>
+</div>
+
+<div class="card">
+<h3>3.2 SwiGLU FFN</h3>
+<div class="two-col">
+  <div>
+    <h4>原理</h4>
+    <p>SwiGLU 是 LLaMA、PaLM 等模型采用的 FFN 变体：</p>
+    <pre>SwiGLU(x) = (W1*x) * sigmoid(W2*x) @ W3</pre>
+    <p>相比标准 FFN (W1*x @ W2)，SwiGLU 引入门控非线性，表达能力更强。</p>
+  </div>
+  <div>
+    <h4>实验关联</h4>
+    <p>E1 中 SwiGLU encoder 表现不佳 (0.7199 vs 0.7354)，但 encoder 和 FFN 职责不同。当前 tokenizer 的 project 已使用 SiLU，说明框架兼容此类激活函数。</p>
+  </div>
+</div>
+<div class="note">
+<strong>注意：</strong>SwiGLU 使用 3 个权重矩阵而非 2 个，参数量增加 50%。建议将 hidden_mult 从 4 降至 2-3 以保持总参数量不变。
+</div>
+<span class="tag tag-medium">中优先级</span>
+<span class="tag tag-new">新组件</span>
+<span class="tag">预期 AUC +0.1~0.3%</span>
+</div>
+
+<div class="card">
+<h3>3.3 并行 Transformer Block (ParFormer-style)</h3>
+<div class="two-col">
+  <div>
+    <h4>原理</h4>
+    <p>标准 Transformer Block 串行执行 Attention -> FFN。并行块同时计算两者后相加：</p>
+    <pre>y = x + Attention(LN(x)) + FFN(LN(x))</pre>
+    <p>减少层间通信，加速训练；且 Pre-LN 下理论等价于标准结构。</p>
+  </div>
+  <div>
+    <h4>适用性</h4>
+    <p>对 num_blocks=2 的浅层网络收益有限，但对未来扩展到更深网络（如 Criteo 的 3.29M 参数已验证 b=8）可缓解通信瓶颈。</p>
+  </div>
+</div>
+<span class="tag tag-low">低优先级</span>
+<span class="tag tag-new">新组件</span>
+<span class="tag">预期 训练速度 +5~10%</span>
+</div>
+
+<div class="card">
+<h3>3.4 Stochastic Depth (DropPath)</h3>
+<div class="two-col">
+  <div>
+    <h4>原理</h4>
+    <p>训练时以概率 p 随机"跳过"整个 block（将其输出设为输入），测试时使用所有 block。作为深层网络的正则化手段。</p>
+  </div>
+  <div>
+    <h4>关键关联</h4>
+    <p>E6 显示 b=4/8 性能低于 b=2，正是过拟合信号。Stochastic Depth 可使 b=4/8 在正则化下恢复性能，突破当前深度瓶颈。</p>
+  </div>
+</div>
+<div class="insight">
+<strong>核心洞察：</strong>这是解决"倒U型深度曲线"最直接的手段。对 b=4 设置 drop_path_rate=0.1~0.2，可能使 b=4 达到或超过 b=2 的性能。
+</div>
+<span class="tag tag-high">高优先级</span>
+<span class="tag tag-new">新组件</span>
+<span class="tag">预期 b=4 AUC 从 0.7358 提升至 0.7370+</span>
+</div>
+
+<!-- ============================ -->
+<h2 id="sec-interaction">4. 特征交互优化</h2>
+
+<div class="card">
+<h3>4.1 显式二阶特征交叉层 (Explicit FM Layer)</h3>
+<div class="two-col">
+  <div>
+    <h4>原理</h4>
+    <p>在 NS tokenizer 输出后，添加显式的特征交叉：</p>
+    <pre># 输入: (batch, T, d_model)
+cross = sum_i sum_j (x_i * x_j)  # 二阶交互
+output = Linear(concat([x, cross]))</pre>
+    <p>CTR 预测中特征交叉至关重要（如 "device_type x hour" 的组合效应）。</p>
+  </div>
+  <div>
+    <h4>关联分析</h4>
+    <p>rank_mixer_mode=none 最优说明模型在"隐式"地学习交叉，但显式引入可能更数据高效。可替代被废弃的 rank_mixer。</p>
+  </div>
+</div>
+<span class="tag tag-high">高优先级</span>
+<span class="tag tag-new">新组件</span>
+<span class="tag">预期 AUC +0.2~0.5%</span>
+</div>
+
+<div class="card">
+<h3>4.2 特征级自注意力 (Feature-wise Self-Attention)</h3>
+<div class="two-col">
+  <div>
+    <h4>原理</h4>
+    <p>在 NS token 之间（即不同特征组之间）应用轻量级 self-attention：</p>
+    <pre># NS tokens: (batch, num_ns, d_model)
+# 使用单头或低秩 attention
+attn_output = Attention(NS_tokens, NS_tokens, NS_tokens)</pre>
+    <p>让不同特征组之间自适应地交换信息，替代硬编码的 rank mixing。</p>
+  </div>
+  <div>
+    <h4>优势</h4>
+    <p>相比 rank_mixer 的固定模式，自注意力让数据决定交互权重。num_ns 很小（当前为 3），attention 计算开销可忽略。</p>
+  </div>
+</div>
+<span class="tag tag-medium">中优先级</span>
+<span class="tag tag-new">新组件</span>
+<span class="tag">预期 AUC +0.1~0.3%</span>
+</div>
+
+<div class="card">
+<h3>4.3 FiBiNET-style Squeeze-and-Excitation</h3>
+<div class="two-col">
+  <div>
+    <h4>原理</h4>
+    <p>为每个特征 token 学习一个重要性权重：</p>
+    <pre>squeeze = mean(tokens, dim=-1)      # (batch, T)
+excite = Linear2(SiLU(Linear1(squeeze)))  # (batch, T)
+weights = sigmoid(excite)
+output = tokens * weights.unsqueeze(-1)</pre>
+  </div>
+  <div>
+    <h4>适用性</h4>
+    <p>CTR 模型中不同特征重要性差异巨大（如 user_id vs 次要特征）。SENET 让模型自动抑制噪声特征，增强信号特征。</p>
+  </div>
+</div>
+<span class="tag tag-medium">中优先级</span>
+<span class="tag tag-new">新组件</span>
+<span class="tag">预期 AUC +0.1~0.2%</span>
+</div>
+
+<!-- ============================ -->
+<h2 id="sec-training">5. 训练算法优化</h2>
+
+<div class="card">
+<h3>5.1 Muon 优化器</h3>
+<div class="two-col">
+  <div>
+    <h4>现状</h4>
+    <p>框架已内置 <code>Muon</code> 优化器（<code>taac2026/infrastructure/optimization/muon.py</code>），对 >=2D 参数使用 Newton-Schulz 正交化更新，对向量参数回退到 AdamW。</p>
+  </div>
+  <div>
+    <h4>优化建议</h4>
+    <p>当前使用 AdamW。Muon 在矩阵参数上通过正交约束实现更稳定的梯度更新，对 attention/FFN 的权重矩阵尤其有效。建议在 Criteo/Amazon 大数据集上优先尝试。</p>
+  </div>
+</div>
+<div class="insight">
+<strong>框架就绪度：</strong><span class="check">100%</span> — 只需将 <code>dense_optimizer_type</code> 从 <code>"adamw"</code> 改为 <code>"muon"</code>。
+</div>
+<span class="tag tag-high">高优先级</span>
+<span class="tag tag-framework">框架已支持</span>
+<span class="tag">预期 AUC +0.1~0.3% | 训练更稳定</span>
+</div>
+
+<div class="card">
+<h3>5.2 Cosine LR Schedule + Warmup</h3>
+<div class="two-col">
+  <div>
+    <h4>现状</h4>
+    <p>框架已支持 cosine/linear scheduler + warmup（<code>taac2026/infrastructure/optimization/schedules.py</code>），但当前配置使用 <code>"none"</code>。</p>
+  </div>
+  <div>
+    <h4>优化建议</h4>
+    <p>实验训练 5000 steps，使用 cosine decay（min_lr_ratio=0.1）+ 200-step warmup 可让模型在训练后期更精细地收敛，避免震荡。</p>
+  </div>
+</div>
+<div class="insight">
+<strong>框架就绪度：</strong><span class="check">100%</span> — 设置 <code>scheduler_type="cosine", warmup_steps=200, min_lr_ratio=0.1</code>。
+</div>
+<span class="tag tag-medium">中优先级</span>
+<span class="tag tag-framework">框架已支持</span>
+<span class="tag">预期 LogLoss -0.001~0.003</span>
+</div>
+
+<div class="card">
+<h3>5.3 EMA (Exponential Moving Average)</h3>
+<div class="two-col">
+  <div>
+    <h4>现状</h4>
+    <p>框架已完整支持 EMA（<code>PCVREMAConfig</code>），但当前未启用。EMA 在验证和推理时使用参数的移动平均，平滑训练噪声。</p>
+  </div>
+  <div>
+    <h4>优化建议</h4>
+    <p>启用 EMA：decay=0.999, start_step=1000。特别适合当前"轻量模型+固定数据"场景，可挤出最后一点性能。</p>
+  </div>
+</div>
+<div class="insight">
+<strong>框架就绪度：</strong><span class="check">100%</span> — 设置 <code>ema_enabled=true, ema_decay=0.999, ema_start_step=1000</code>。
+</div>
+<span class="tag tag-medium">中优先级</span>
+<span class="tag tag-framework">框架已支持</span>
+<span class="tag">预期 AUC +0.05~0.15%</span>
+</div>
+
+<div class="card">
+<h3>5.4 标签平滑 (Label Smoothing)</h3>
+<div class="two-col">
+  <div>
+    <h4>原理</h4>
+    <p>将 hard label [0, 1] 替换为 soft label [0.05, 0.95]，防止模型对训练样本过度自信，提升泛化。</p>
+  </div>
+  <div>
+    <h4>CTR 场景</h4>
+    <p>CTR 数据中存在大量噪声标签（误点击、机器人流量），标签平滑可缓解标签噪声的影响。</p>
+  </div>
+</div>
+<span class="tag tag-medium">中优先级</span>
+<span class="tag tag-new">需修改 loss 计算</span>
+<span class="tag">预期 AUC +0.05~0.1%</span>
+</div>
+
+<div class="card">
+<h3>5.5 数据增强</h3>
+<div class="two-col">
+  <div>
+    <h4>框架支持</h4>
+    <p>框架已内置多种数据增强（<code>PCVRDataPipelineConfig</code>）：
+    <ul>
+      <li><code>feature_mask</code>: 随机 mask 非序列特征</li>
+      <li><code>domain_dropout</code>: 随机丢弃整个序列域</li>
+      <li><code>sequence_crop</code>: 随机截取序列子窗口</li>
+      <li><code>nonseq_sparse_dropout</code>: 稀疏特征 dropout</li>
+    </ul>
+    </p>
+  </div>
+  <div>
+    <h4>优化建议</h4>
+    <p>当前均未启用。建议对 Avazu 启用：<br>
+    - feature_mask probability=0.1<br>
+    - nonseq_sparse_dropout probability=0.05<br>
+    对 Amazon 启用 sequence_crop (views_per_row=2) 增加序列多样性。</p>
+  </div>
+</div>
+<div class="insight">
+<strong>框架就绪度：</strong><span class="check">100%</span> — 在配置中启用对应 transform 即可。
+</div>
+<span class="tag tag-medium">中优先级</span>
+<span class="tag tag-framework">框架已支持</span>
+<span class="tag">预期 AUC +0.05~0.2%</span>
+</div>
+
+<!-- ============================ -->
+<h2 id="sec-sequence">6. 序列编码优化</h2>
+
+<div class="card">
+<h3>6.1 多尺度序列编码</h3>
+<div class="two-col">
+  <div>
+    <h4>原理</h4>
+    <p>使用多个并行的序列编码器，分别处理不同时间粒度的序列：</p>
+    <pre>encoder_recent   -> 最近 10 个交互
+encoder_medium   -> 最近 50 个交互
+encoder_long     -> 完整序列</pre>
+    <p>最后将多尺度表示拼接或注意力融合。</p>
+  </div>
+  <div>
+    <h4>适用性</h4>
+    <p>Amazon 数据集上序列长度 50，用户行为存在明显的短期/长期兴趣分离。多尺度编码可分别捕捉"最近浏览"和"长期偏好"。</p>
+  </div>
+</div>
+<span class="tag tag-medium">中优先级</span>
+<span class="tag tag-new">新组件</span>
+<span class="tag">Amazon 预期 AUC +0.3~0.5%</span>
+</div>
+
+<div class="card">
+<h3>6.2 T5-style 相对位置偏置</h3>
+<div class="two-col">
+  <div>
+    <h4>原理</h4>
+    <p>RoPE 实验显示无收益。替代方案：使用可学习的相对位置偏置矩阵 B，直接加到 attention score：</p>
+    <pre>attention_score = QK^T / sqrt(d) + B[pos_i - pos_j]</pre>
+    <p>比绝对位置编码更短序列友好。</p>
+  </div>
+  <div>
+    <h4>优势</h4>
+    <p>T5 的相对偏置在短文本任务上表现优异。对 Avazu 的 device_id 序列（长度&lt;50），相对偏置比 RoPE 更自然地建模"相邻交互"关系。</p>
+  </div>
+</div>
+<span class="tag tag-medium">中优先级</span>
+<span class="tag tag-new">新组件</span>
+<span class="tag">预期 AUC +0.05~0.15%</span>
+</div>
+
+<div class="card">
+<h3>6.3 序列统计特征注入</h3>
+<div class="two-col">
+  <div>
+    <h4>现状</h4>
+    <p>框架的 <code>ModelInput</code> 已包含 <code>seq_stats</code>（每个序列域 6 维统计量），但模型可能未充分利用。</p>
+  </div>
+  <div>
+    <h4>优化建议</h4>
+    <p>将 seq_stats（如序列长度、均值、方差等）通过 MLP 投影后与序列编码输出拼接，作为额外的全局上下文信号。</p>
+  </div>
+</div>
+<div class="insight">
+<strong>框架就绪度：</strong><span class="check">100%</span> — 数据已传入，只需在模型中接入。
+</div>
+<span class="tag tag-low">低优先级</span>
+<span class="tag tag-framework">框架已支持</span>
+<span class="tag">预期 AUC +0.05%</span>
+</div>
+
+<!-- ============================ -->
+<h2 id="sec-dataset">7. 跨数据集特定优化</h2>
+
+<div class="card">
+<h3>7.1 Avazu (当前基线数据集)</h3>
+<table>
+<tr><th>诊断</th><th>优化策略</th></tr>
+<tr>
+  <td>轻量模型已接近性能上限，增加容量导致过拟合</td>
+  <td><strong>强正则化优先：</strong>启用 DropPath + feature_mask + dropout_rate 提升至 0.05</td>
+</tr>
+<tr>
+  <td>rank_mixer 无益，特征交叉不足</td>
+  <td><strong>显式 FM 层 + SENET：</strong>在不增加模型深度的情况下增强特征交互</td>
+</tr>
+<tr>
+  <td>训练策略保守</td>
+  <td><strong>Cosine schedule + EMA + 标签平滑</strong>榨取最后性能</td>
+</tr>
+<tr>
+  <td>仅 1 个 seq domain，num_queries 受限</td>
+  <td><strong>放宽 d_model%T=0 约束：</strong>使用 padding 或分组注意力使 T 不整除 d_model 也可工作</td>
+</tr>
+</table>
+</div>
+
+<div class="card">
+<h3>7.2 Criteo (最佳表现数据集)</h3>
+<table>
+<tr><th>诊断</th><th>优化策略</th></tr>
+<tr>
+  <td>数据量最大 (45.8M)，AUC 最高 (0.7853)，模型容量未达上限</td>
+  <td><strong>增加容量：</strong>d_model=128, num_blocks=4，配合 DropPath 正则化</td>
+</tr>
+<tr>
+  <td>无序列特征 (num_sequences=0)</td>
+  <td><strong>纯 NS 交互优化：</strong>重点投入 FM 层和特征级自注意力</td>
+</tr>
+<tr>
+  <td>连续特征 13 + 离散特征 26，特征丰富</td>
+  <td><strong>SENET 必开：</strong>学习特征重要性权重，抑制噪声特征</td>
+</tr>
+<tr>
+  <td>已验证 num_sequences=0 支持</td>
+  <td><strong>Muon 优化器：</strong>大数据集上正交化更新优势更明显</td>
+</tr>
+</table>
+</div>
+
+<div class="card">
+<h3>7.3 Amazon (最薄弱数据集)</h3>
+<table>
+<tr><th>诊断</th><th>优化策略</th></tr>
+<tr>
+  <td>评分预测 (5类) 比 CTR (2类) 更难，AUC 仅 0.6633</td>
+  <td><strong>输出层改进：</strong>从二分类 sigmoid 改为 5 类 ordinal regression 或有序分类</td>
+</tr>
+<tr>
+  <td>user-item 交互序列，时序建模关键</td>
+  <td><strong>多尺度序列编码 + T5 相对偏置：</strong>强化时序信号</td>
+</tr>
+<tr>
+  <td>数据量最小 (7.8M)</td>
+  <td><strong>数据增强：</strong>sequence_crop (views_per_row=2) + feature_mask</td>
+</tr>
+<tr>
+  <td>正样本率 74.55%，类别不平衡</td>
+  <td><strong>Focal Loss 或样本加权：</strong>框架的 <code>PCVRLossConfig</code> 支持自定义 loss term</td>
+</tr>
+</table>
+</div>
+
+<!-- ============================ -->
+<h2 id="sec-priority">8. 优先级排序与实施路线图</h2>
+
+<div class="card">
+<h3>8.1 优先级矩阵</h3>
+<table class="priority-table">
+<tr>
+  <th>优化项</th>
+  <th>类别</th>
+  <th>实施难度</th>
+  <th>预期收益</th>
+  <th>优先级</th>
+  <th>框架就绪</th>
+</tr>
+<tr>
+  <td>RMSNorm + Pre-LN</td>
+  <td>Block 结构</td>
+  <td class="score score-low">低</td>
+  <td class="score score-medium">中</td>
+  <td><span class="tag tag-high">P0</span></td>
+  <td class="check">是</td>
+</tr>
+<tr>
+  <td>Cosine Schedule + Warmup</td>
+  <td>训练算法</td>
+  <td class="score score-low">低</td>
+  <td class="score score-medium">中</td>
+  <td><span class="tag tag-high">P0</span></td>
+  <td class="check">是</td>
+</tr>
+<tr>
+  <td>显式 FM 特征交叉层</td>
+  <td>特征交互</td>
+  <td class="score score-medium">中</td>
+  <td class="score score-high">高</td>
+  <td><span class="tag tag-high">P0</span></td>
+  <td class="cross">否</td>
+</tr>
+<tr>
+  <td>Stochastic Depth (DropPath)</td>
+  <td>Block 结构</td>
+  <td class="score score-medium">中</td>
+  <td class="score score-high">高</td>
+  <td><span class="tag tag-high">P0</span></td>
+  <td class="cross">否</td>
+</tr>
+<tr>
+  <td>Muon 优化器</td>
+  <td>训练算法</td>
+  <td class="score score-low">低</td>
+  <td class="score score-medium">中</td>
+  <td><span class="tag tag-high">P0</span></td>
+  <td class="check">是</td>
+</tr>
+<tr>
+  <td>GQA</td>
+  <td>注意力</td>
+  <td class="score score-medium">中</td>
+  <td class="score score-medium">中</td>
+  <td><span class="tag tag-medium">P1</span></td>
+  <td class="cross">否</td>
+</tr>
+<tr>
+  <td>EMA</td>
+  <td>训练算法</td>
+  <td class="score score-low">低</td>
+  <td class="score score-medium">中</td>
+  <td><span class="tag tag-medium">P1</span></td>
+  <td class="check">是</td>
+</tr>
+<tr>
+  <td>数据增强 (mask/dropout)</td>
+  <td>训练算法</td>
+  <td class="score score-low">低</td>
+  <td class="score score-medium">中</td>
+  <td><span class="tag tag-medium">P1</span></td>
+  <td class="check">是</td>
+</tr>
+<tr>
+  <td>特征级自注意力</td>
+  <td>特征交互</td>
+  <td class="score score-medium">中</td>
+  <td class="score score-medium">中</td>
+  <td><span class="tag tag-medium">P1</span></td>
+  <td class="cross">否</td>
+</tr>
+<tr>
+  <td>门控注意力</td>
+  <td>注意力</td>
+  <td class="score score-medium">中</td>
+  <td class="score score-medium">中</td>
+  <td><span class="tag tag-medium">P1</span></td>
+  <td class="cross">否</td>
+</tr>
+<tr>
+  <td>SwiGLU FFN</td>
+  <td>Block 结构</td>
+  <td class="score score-medium">中</td>
+  <td class="score score-medium">中</td>
+  <td><span class="tag tag-medium">P1</span></td>
+  <td class="cross">否</td>
+</tr>
+<tr>
+  <td>SENET 通道注意力</td>
+  <td>特征交互</td>
+  <td class="score score-low">低</td>
+  <td class="score score-medium">中</td>
+  <td><span class="tag tag-medium">P1</span></td>
+  <td class="cross">否</td>
+</tr>
+<tr>
+  <td>标签平滑</td>
+  <td>训练算法</td>
+  <td class="score score-low">低</td>
+  <td class="score score-low">低</td>
+  <td><span class="tag tag-medium">P1</span></td>
+  <td class="cross">否</td>
+</tr>
+<tr>
+  <td>T5 相对位置偏置</td>
+  <td>序列编码</td>
+  <td class="score score-medium">中</td>
+  <td class="score score-medium">中</td>
+  <td><span class="tag tag-low">P2</span></td>
+  <td class="cross">否</td>
+</tr>
+<tr>
+  <td>多尺度序列编码</td>
+  <td>序列编码</td>
+  <td class="score score-high">高</td>
+  <td class="score score-high">高</td>
+  <td><span class="tag tag-low">P2</span></td>
+  <td class="cross">否</td>
+</tr>
+<tr>
+  <td>线性/稀疏注意力</td>
+  <td>注意力</td>
+  <td class="score score-high">高</td>
+  <td class="score score-low">低</td>
+  <td><span class="tag tag-low">P2</span></td>
+  <td class="cross">否</td>
+</tr>
+<tr>
+  <td>并行 Transformer Block</td>
+  <td>Block 结构</td>
+  <td class="score score-medium">中</td>
+  <td class="score score-low">低</td>
+  <td><span class="tag tag-low">P2</span></td>
+  <td class="cross">否</td>
+</tr>
+<tr>
+  <td>seq_stats 注入</td>
+  <td>序列编码</td>
+  <td class="score score-low">低</td>
+  <td class="score score-low">低</td>
+  <td><span class="tag tag-low">P2</span></td>
+  <td class="check">是</td>
+</tr>
+</table>
+</div>
+
+<div class="card">
+<h3>8.2 推荐实施路线图</h3>
+
+<h4>Phase 1: 零代码快速收益（框架已支持，仅改配置）</h4>
+<ol>
+  <li>启用 <code>RMSNorm</code>: <code>rms_norm_backend="triton"</code></li>
+  <li>启用 <code>Cosine LR + Warmup</code>: <code>scheduler_type="cosine", warmup_steps=200, min_lr_ratio=0.1</code></li>
+  <li>启用 <code>Muon</code>: <code>dense_optimizer_type="muon"</code></li>
+  <li>启用 <code>EMA</code>: <code>ema_enabled=true, ema_decay=0.999</code></li>
+  <li>启用 <code>数据增强</code>: <code>feature_mask probability=0.1</code></li>
+</ol>
+<div class="insight">
+<strong>预期总收益：</strong>AUC +0.2~0.5%，无需任何代码修改，仅调整训练配置即可验证。
+</div>
+
+<h4>Phase 2: 核心结构改进（需修改模型代码）</h4>
+<ol>
+  <li>添加 <strong>Stochastic Depth</strong> 到 block 中，重新测试 b=4/8</li>
+  <li>用 <strong>RMSNorm + Pre-LN</strong> 重构 block 结构</li>
+  <li>添加 <strong>显式 FM 层</strong> 替代 rank_mixer</li>
+  <li>添加 <strong>SENET</strong> 到 NS token 输出</li>
+</ol>
+<div class="insight">
+<strong>预期总收益：</strong>AUC +0.3~0.8%，解决当前最核心瓶颈（过拟合 + 特征交互不足）。
+</div>
+
+<h4>Phase 3: 高级探索（实验性优化）</h4>
+<ol>
+  <li><strong>GQA</strong> 注意力变体</li>
+  <li><strong>SwiGLU FFN</strong> + 并行块</li>
+  <li><strong>多尺度序列编码</strong>（针对 Amazon）</li>
+  <li><strong>T5 相对位置偏置</strong>（替代 RoPE）</li>
+</ol>
+</div>
+
+<!-- ============================ -->
+<h2 id="sec-code">9. 关键代码实现参考</h2>
+
+<div class="card">
+<h3>9.1 框架已支持的快速启用配置</h3>
+<pre>"""Phase 1 优化配置示例 (config.json)"""
+{
+  "d_model": 64,
+  "emb_dim": 64,
+  "num_blocks": 2,
+  "num_queries": 1,
+  "seq_encoder_type": "longer",
+  "seq_causal": true,
+  "rank_mixer_mode": "none",
+  "ns_tokenizer_type": "rankmixer",
+  "user_ns_tokens": 1,
+  "item_ns_tokens": 2,
+
+  "dense_optimizer_type": "muon",
+  "scheduler_type": "cosine",
+  "warmup_steps": 200,
+  "min_lr_ratio": 0.1,
+
+  "ema_enabled": true,
+  "ema_decay": 0.999,
+  "ema_start_step": 1000,
+
+  "rms_norm_backend": "triton",
+
+  "data_pipeline": {
+    "transforms": [
+      {
+        "name": "feature_mask",
+        "enabled": true,
+        "probability": 0.1
+      },
+      {
+        "name": "nonseq_sparse_dropout",
+        "enabled": true,
+        "probability": 0.05
+      }
+    ]
+  }
+}</pre>
+</div>
+
+<div class="card">
+<h3>9.2 Stochastic Depth (DropPath) 伪代码</h3>
+<pre>"""在 PCVRHyFormer 的 block forward 中嵌入"""
+import torch.nn as nn
+
+class PCVRBlock(nn.Module):
+    def __init__(self, d_model, num_heads, drop_path_rate=0.0):
+        super().__init__()
+        self.attn = MultiHeadAttention(d_model, num_heads)
+        self.ffn = FeedForward(d_model)
+        self.norm1 = RMSNorm(d_model)
+        self.norm2 = RMSNorm(d_model)
+        self.drop_path_rate = drop_path_rate
+
+    def forward(self, x, mask=None):
+        # Pre-LN: 归一化在子层之前
+        # Stochastic Depth: 训练时随机跳过整个子层
+        if self.training and torch.rand(1).item() < self.drop_path_rate:
+            attn_out = 0
+        else:
+            attn_out = self.attn(self.norm1(x), mask)
+        x = x + attn_out
+
+        if self.training and torch.rand(1).item() < self.drop_path_rate:
+            ffn_out = 0
+        else:
+            ffn_out = self.ffn(self.norm2(x))
+        x = x + ffn_out
+        return x</pre>
+</div>
+
+<div class="card">
+<h3>9.3 显式二阶 FM 层伪代码</h3>
+<pre>"""替代 rank_mixer 的显式特征交叉模块"""
+import torch
+import torch.nn as nn
+
+class ExplicitFeatureCross(nn.Module):
+    def __init__(self, num_tokens, d_model, cross_dim=64):
+        super().__init__()
+        self.num_tokens = num_tokens
+        self.cross_proj = nn.Linear(d_model, cross_dim)
+        # 输出投影: 原始特征 + 交叉特征
+        self.output_proj = nn.Sequential(
+            nn.LayerNorm(num_tokens * d_model + cross_dim),
+            nn.Linear(num_tokens * d_model + cross_dim, num_tokens * d_model),
+            nn.SiLU(),
+            nn.LayerNorm(num_tokens * d_model),
+        )
+
+    def forward(self, tokens):
+        # tokens: (batch, num_tokens, d_model)
+        B, T, D = tokens.shape
+        # 降维后的特征用于交叉
+        z = self.cross_proj(tokens)  # (B, T, cross_dim)
+        # 二阶交叉: sum_{i&lt;j} z_i * z_j
+        square_sum = (z ** 2).sum(dim=1)           # (B, cross_dim)
+        sum_square = z.sum(dim=1) ** 2              # (B, cross_dim)
+        cross = 0.5 * (sum_square - square_sum)     # (B, cross_dim)
+        # 拼接原始特征和交叉特征
+        flat = tokens.view(B, T * D)
+        combined = torch.cat([flat, cross], dim=-1)
+        output = self.output_proj(combined).view(B, T, D)
+        return output</pre>
+</div>
+
+<div class="card">
+<h3>9.4 SENET 通道注意力伪代码</h3>
+<pre>"""Squeeze-and-Excitation for feature tokens"""
+class SENET(nn.Module):
+    def __init__(self, num_tokens, reduction=2):
+        super().__init__()
+        hidden = max(1, num_tokens // reduction)
+        self.fc = nn.Sequential(
+            nn.Linear(num_tokens, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, num_tokens),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, tokens):
+        # tokens: (batch, num_tokens, d_model)
+        # Squeeze: 沿 d_model 维度取平均
+        squeeze = tokens.mean(dim=-1)       # (batch, num_tokens)
+        # Excitation: 学习每个 token 的重要性
+        excite = self.fc(squeeze)            # (batch, num_tokens)
+        # Scale
+        return tokens * excite.unsqueeze(-1) # (batch, num_tokens, d_model)</pre>
+</div>
+
+<div class="summary-box">
+<h3>总结：最高 ROI 的 5 项优化</h3>
+<ol>
+  <li><strong>RMSNorm + Pre-LN</strong> — 框架已支持，替换即生效，解决深层网络训练不稳定问题。</li>
+  <li><strong>Cosine LR + Warmup + Muon + EMA</strong> — 框架已支持，纯配置调整，训练策略全面升级。</li>
+  <li><strong>显式 FM 特征交叉层</strong> — 替代无效的 rank_mixer，针对 CTR 任务本质优化。</li>
+  <li><strong>Stochastic Depth</strong> — 解决容量瓶颈，让 b=4/8 恢复性能，突破当前深度限制。</li>
+  <li><strong>数据增强 (feature_mask)</strong> — 框架已支持，零代码缓解 Avazu 过拟合。</li>
+</ol>
+<p style="margin-bottom:0"><strong>保守估计：</strong>仅实施 Phase 1 + Phase 2 的核心 5 项，Avazu AUC 有望从 <span class="metric">0.7406</span> 提升至 <span class="metric">0.7430~0.7460</span> 区间。</p>
+</div>
+
+</body>
+</html>

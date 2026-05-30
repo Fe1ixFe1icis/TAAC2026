@@ -1,0 +1,36 @@
+# ===== 训练输出（核心：跳过这些） =====
+outputs/
+runs/
+checkpoints/
+*.pth
+*.pt
+*.ckpt
+*.h5
+logs/
+*.log
+
+# ===== 数据集 =====
+data/
+datasets/
+*.csv
+*.tsv
+*.zip
+*.tar.gz
+
+# ===== Python 环境 =====
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.env
+
+# ===== IDE =====
+.idea/
+.vscode/
+
+# ===== 系统文件 =====
+.DS_Store
+Thumbs.db
+
+figures/
+.hf_cache/

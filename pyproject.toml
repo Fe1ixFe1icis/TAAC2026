@@ -1,0 +1,113 @@
+[build-system]
+requires = ["setuptools>=82"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "taac2026"
+dynamic = ["version"]
+description = "TAAC 2026 experiment workspace (Windows)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10,<3.14"
+classifiers = [
+	"Operating System :: Microsoft :: Windows",
+]
+dependencies = [
+	"datasets==2.14.7",
+	"loguru==0.7.3",
+	"matplotlib==3.10.8",
+	"numpy==2.2.5",
+	"orjson==3.11.8",
+	"pyarrow==23.0.1",
+	"pydantic==2.12.5",
+	"rich==14.3.3",
+	"safetensors==0.7.0",
+	"scikit-learn==1.7.2",
+	"tensorboard==2.19.0",
+	"tomli==2.4.0",
+	"tqdm==4.67.3",
+	"tyro==1.0.13",
+]
+
+[project.optional-dependencies]
+dev = [
+	"hypothesis==6.152.9",
+	"pytest==9.0.3",
+	"pytest-benchmark==5.2.3",
+	"pytest-cov==7.1.0",
+	"ruff==0.15.13",
+	"vulture==2.16",
+	"zensical==0.0.43",
+]
+
+[project.scripts]
+taac-train = "taac2026.application.training.cli:main"
+taac-evaluate = "taac2026.application.evaluation.cli:main"
+taac-package-train = "taac2026.application.packaging.cli:training_main"
+taac-package-infer = "taac2026.application.packaging.cli:inference_main"
+taac-generate-pcvr-synthetic-dataset = "taac2026.application.benchmarking.generate_pcvr_synthetic_dataset:main"
+taac-benchmark-pcvr-data-pipeline = "taac2026.application.benchmarking.pcvr_data_pipeline_benchmark:main"
+taac-benchmark-pcvr-optimizer = "taac2026.application.benchmarking.pcvr_optimizer_benchmark:main"
+taac-benchmark-pcvr-tilelang-ops = "taac2026.application.benchmarking.pcvr_tilelang_ops_benchmark:main"
+taac-plot-pcvr-diagnostics = "taac2026.application.benchmarking.pcvr_diagnostic_plots:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "taac2026.__version__"}
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.package-data]
+"taac2026.infrastructure.data.native" = ["*.cpp"]
+"taac2026.infrastructure.accelerators.embedding.kernels" = ["*.cu"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "bench_*.py"]
+addopts = "-ra --strict-markers --import-mode=importlib"
+markers = [
+	"unit: fast unit tests for pure logic and local contracts",
+	"contract: stable module and experiment package interface tests",
+	"integration: higher-level workflow tests across module boundaries",
+	"gpu: tests that require a CUDA GPU (skipped automatically when unavailable)",
+	"benchmark_cpu: CPU-safe benchmark tests that run in automatic CI",
+	"benchmark_gpu: GPU benchmark tests that run only via local CLI entry points",
+]
+
+[tool.ruff]
+target-version = "py310"
+extend-exclude = ["docs/archive/files"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+extend-select = ["B", "UP", "PTH", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/gpu_env_support.py" = ["E402"]
+
+[tool.vulture]
+paths = ["src", "experiments", "tests"]
+min_confidence = 100
+
+[tool.coverage.run]
+branch = true
+source = [
+	"src/taac2026/domain",
+	"src/taac2026/application/bootstrap",
+	"src/taac2026/application/evaluation",
+	"src/taac2026/application/experiments",
+	"src/taac2026/application/packaging",
+	"src/taac2026/application/training",
+	"src/taac2026/infrastructure/bundles",
+	"src/taac2026/infrastructure/data",
+	"src/taac2026/infrastructure/experiments",
+	"src/taac2026/infrastructure/modeling",
+	"src/taac2026/infrastructure/runtime",
+]
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true
