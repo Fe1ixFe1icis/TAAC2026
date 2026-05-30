@@ -1,4 +1,3 @@
-# ===== 训练输出（核心：跳过这些） =====
 outputs/
 runs/
 checkpoints/
@@ -9,7 +8,6 @@ checkpoints/
 logs/
 *.log
 
-# ===== 数据集 =====
 data/
 datasets/
 *.csv
@@ -17,20 +15,18 @@ datasets/
 *.zip
 *.tar.gz
 
-# ===== Python 环境 =====
 venv/
 .venv/
 __pycache__/
 *.py[cod]
 .env
 
-# ===== IDE =====
 .idea/
 .vscode/
 
-# ===== 系统文件 =====
 .DS_Store
 Thumbs.db
 
-figures/
+*.pyc
+
 .hf_cache/
