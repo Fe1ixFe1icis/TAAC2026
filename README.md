@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🎯 TAAC 2026 — TokenFormer CTR 预估模型
+# 🎯 TAAC 2026 CTR 预估模型
 
 [![AUC](https://img.shields.io/badge/AUC-0.7741-brightgreen?style=for-the-badge&logo=target)](https://github.com/Fe1ixFe1icis/TAAC2026)
 [![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)](https://python.org)
@@ -9,11 +9,6 @@
 
 **统一 Token 流架构的点击率预估方案**
 
-<p align="center">
-  <img src="https://img.shields.io/badge/TokenFormer-架构-6C63FF?style=flat-square" alt="TokenFormer">
-  <img src="https://img.shields.io/badge/Scaling-Law-FF6B6B?style=flat-square" alt="Scaling Law">
-  <img src="https://img.shields.io/badge/工业级-推荐-4ECDC4?style=flat-square" alt="Industrial">
-</p>
 
 </div>
 
