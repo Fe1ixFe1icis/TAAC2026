@@ -1,7 +1,6 @@
 <div align="center">
 
 # 🎯 TAAC 2026 CTR 预估模型
-=======
 
 [![AUC](https://img.shields.io/badge/AUC-0.7741-brightgreen?style=for-the-badge&logo=target)](https://github.com/Fe1ixFe1icis/TAAC2026)
 [![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)](https://python.org)
