@@ -6,10 +6,10 @@ export default function Footer() {
           TAAC 2026 &middot; TokenFormer
         </span>
         <span className="text-sm text-text-secondary">
-          组会汇报 README
+		README Pages
         </span>
         <span className="text-sm text-text-secondary">
-          Generated with ❤️ for Research
+          FelixFelicis Tan Research
         </span>
       </div>
     </footer>
