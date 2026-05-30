@@ -62,14 +62,25 @@ class RMSNorm(nn.Module):
 
 
 class SwiGLUFFN(nn.Module):
-    """SwiGLU FFN (Eq. 19): H = (Swish(I~ W1) ⊙ (I~ W2)) W3."""
+    """SwiGLU FFN (Eq. 19): H = (Swish(I~ W1) ⊙ (I~ W2)) W3.
 
-    def __init__(self, d_model: int, hidden_mult: int = 4) -> None:
+    Supports down-matrix small initialization (TokenMixer-Large P0)
+    for stable deep model training.
+    """
+
+    def __init__(self, d_model: int, hidden_mult: int = 4, small_init: bool = False, depth: int = 1) -> None:
         super().__init__()
         hidden_dim = d_model * hidden_mult
         self.w1 = nn.Linear(d_model, hidden_dim, bias=False)
         self.w2 = nn.Linear(d_model, hidden_dim, bias=False)
         self.w3 = nn.Linear(hidden_dim, d_model, bias=False)
+
+        # P0: Down-matrix small initialization for deep models
+        if small_init and depth > 1:
+            std = 0.02 / math.sqrt(depth)
+            nn.init.normal_(self.w1.weight, std=std)
+            nn.init.normal_(self.w2.weight, std=std)
+            nn.init.normal_(self.w3.weight, std=std)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.w3(F.silu(self.w1(x)) * self.w2(x))
@@ -213,6 +224,8 @@ class TokenFormerBlock(nn.Module):
         mixed_params: bool = False,
         num_F: int = 0,
         num_V: int = 1,
+        small_init: bool = False,
+        depth: int = 1,
     ) -> None:
         super().__init__()
         assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
@@ -260,7 +273,8 @@ class TokenFormerBlock(nn.Module):
         nn.init.zeros_(self.W_g.weight)
         nn.init.zeros_(self.W_g.bias)
 
-        self.ffn = SwiGLUFFN(d_model, hidden_mult)
+        # P0: Pass small_init and depth to SwiGLUFFN
+        self.ffn = SwiGLUFFN(d_model, hidden_mult, small_init=small_init, depth=depth)
 
     def _build_attn_mask(
         self,
@@ -497,6 +511,7 @@ class TokenFormerModel(nn.Module):
         flash_attention_backend: str = 'torch',
         rms_norm_backend: str = 'torch',
         rms_norm_block_rows: int = 1,
+        **kwargs,
     ) -> None:
         super().__init__()
 
@@ -524,6 +539,7 @@ class TokenFormerModel(nn.Module):
         self.action_num = action_num
         self.max_position = max_position
         self.mixed_params = mixed_params
+        self.small_init = kwargs.get("small_init", False)
 
         # Compose PCVRHyFormer for embedding paths
         self._inner = PCVRHyFormer(
@@ -625,10 +641,15 @@ class TokenFormerModel(nn.Module):
         self.sep_token = nn.Parameter(torch.zeros(1, 1, d_model))
         nn.init.normal_(self.sep_token, mean=0.0, std=0.02)
 
+        # P1: Global Token (CLS-style aggregation)
+        self.global_token = nn.Parameter(torch.zeros(1, 1, d_model))
+        nn.init.normal_(self.global_token, mean=0.0, std=0.02)
+
         # Position assignments
         self.sep_t_position = num_time_buckets
         self.sep_v_position = num_time_buckets + 1
         self.v_position = num_time_buckets + 2
+        self.global_position = 0  # Global token at position 0
 
         # RoPE cache
         rope_max = max(max_position, self.v_position + 1)
@@ -669,6 +690,8 @@ class TokenFormerModel(nn.Module):
                 mixed_params=mixed_params,
                 num_F=self._mp_num_F,
                 num_V=self._mp_num_V,
+                small_init=self.small_init,
+                depth=num_blocks,
             ))
         self.blocks = nn.ModuleList(blocks)
 
@@ -874,7 +897,10 @@ class TokenFormerModel(nn.Module):
         T_positions: torch.Tensor,
         V_tokens: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int, int]:
-        """Builds X = [F | SEP | T | SEP | V]."""
+        """Builds X = [G | F | SEP | T | SEP | V].
+
+        P1: Global Token (G) is prepended to aggregate global information.
+        """
         B = F_tokens.shape[0]
         device = F_tokens.device
         num_F = F_tokens.shape[1]
@@ -882,26 +908,31 @@ class TokenFormerModel(nn.Module):
         num_V = V_tokens.shape[1]
 
         sep_tok = self.sep_token.to(F_tokens.dtype).expand(B, 1, -1)
+        global_tok = self.global_token.to(F_tokens.dtype).expand(B, 1, -1)
 
-        X = torch.cat([F_tokens, sep_tok, T_tokens, sep_tok, V_tokens], dim=1)
+        # P1: Prepend Global Token: [G | F | SEP | T | SEP | V]
+        X = torch.cat([global_tok, F_tokens, sep_tok, T_tokens, sep_tok, V_tokens], dim=1)
         N = X.shape[1]
 
+        G_mask = torch.ones((B, 1), dtype=torch.bool, device=device)
         F_mask = torch.ones((B, num_F), dtype=torch.bool, device=device)
         sep_mask = torch.ones((B, 1), dtype=torch.bool, device=device)
         V_mask = torch.ones((B, num_V), dtype=torch.bool, device=device)
         padding_mask = torch.cat(
-            [F_mask, sep_mask, T_padding, sep_mask, V_mask], dim=1
+            [G_mask, F_mask, sep_mask, T_padding, sep_mask, V_mask], dim=1
         )
 
+        G_pos = torch.full((B, 1), self.global_position, dtype=torch.long, device=device)
         F_pos = torch.zeros((B, num_F), dtype=torch.long, device=device)
         sep1_pos = torch.full((B, 1), self.sep_t_position, dtype=torch.long, device=device)
         sep2_pos = torch.full((B, 1), self.sep_v_position, dtype=torch.long, device=device)
         V_pos = torch.full((B, num_V), self.v_position, dtype=torch.long, device=device)
         positions = torch.cat(
-            [F_pos, sep1_pos, T_positions, sep2_pos, V_pos], dim=1
+            [G_pos, F_pos, sep1_pos, T_positions, sep2_pos, V_pos], dim=1
         )
 
-        v_start = num_F + 1 + num_T + 1
+        # Adjust v_start/v_end for global token offset (+1)
+        v_start = 1 + num_F + 1 + num_T + 1
         v_end = v_start + num_V
         return X, padding_mask, positions, num_F, v_start, v_end
 
@@ -934,7 +965,16 @@ class TokenFormerModel(nn.Module):
 
         rope_cos, rope_sin = self._gather_rope(positions)
 
-        for block in self.blocks:
+        # P2: Inter-layer Residuals (TokenMixer-Large)
+        # Save residual every interval layers for cross-layer connection
+        residual_stack = []
+        interval = 2  # Every 2 layers
+
+        for i, block in enumerate(self.blocks):
+            # Save residual at start of interval
+            if i % interval == 0:
+                residual_stack.append(X)
+
             X = block(
                 X,
                 padding_mask=padding_mask,
@@ -944,6 +984,10 @@ class TokenFormerModel(nn.Module):
                 v_start=v_start,
                 v_end=v_end,
             )
+
+            # Add cross-layer residual at end of interval
+            if i > 0 and i % interval == interval - 1 and residual_stack:
+                X = X + residual_stack.pop()
 
         V_slice = X[:, v_start:v_end, :]
         pooled = V_slice.mean(dim=1)

@@ -1,0 +1,277 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 2%;
+    --foreground: 0 0% 100%;
+    --card: 0 0% 4%;
+    --card-foreground: 0 0% 100%;
+    --popover: 0 0% 4%;
+    --popover-foreground: 0 0% 100%;
+    --primary: 234 67% 65%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 7%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 0 0% 7%;
+    --muted-foreground: 0 0% 43%;
+    --accent: 0 0% 7%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 100% / 0.08;
+    --input: 0 0% 100% / 0.08;
+    --ring: 234 67% 65%;
+    --radius: 0.625rem;
+    --sidebar-background: 0 0% 4%;
+    --sidebar-foreground: 0 0% 100%;
+    --sidebar-primary: 234 67% 65%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 7%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 0 0% 100% / 0.08;
+    --sidebar-ring: 234 67% 65%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: auto;
+  }
+
+  body {
+    @apply bg-dark-bg text-text-primary antialiased;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #050505;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: linear-gradient(to bottom, #667eea, #764ba2);
+    border-radius: 2px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(to bottom, #764ba2, #667eea);
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #667eea #050505;
+  }
+
+  /* Selection */
+  ::selection {
+    background: rgba(102, 126, 234, 0.3);
+    color: #FFFFFF;
+  }
+}
+
+@layer components {
+  /* Oversized Section Header */
+  .section-title {
+    font-size: clamp(2.5rem, 5vw, 4rem);
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    color: #FFFFFF;
+  }
+
+  .section-overline {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #C8C8C8;
+  }
+
+  /* Glass Card */
+  .glass-card {
+    background: linear-gradient(135deg, #0a0a0a 0%, #111111 100%);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  }
+
+  .glass-card:hover {
+    border-color: rgba(255, 255, 255, 0.15);
+    box-shadow: 0 0 40px rgba(102, 126, 234, 0.1);
+  }
+
+  /* Pill Button */
+  .pill-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 28px;
+    border-radius: 9999px;
+    border: 1px solid #FFFFFF;
+    background: transparent;
+    color: #FFFFFF;
+    font-size: 16px;
+    font-weight: 400;
+    cursor: pointer;
+    transition: all 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+
+  .pill-btn:hover {
+    background: #FFFFFF;
+    color: #050505;
+  }
+
+  /* Metric Number */
+  .metric-number {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: clamp(2rem, 4vw, 3rem);
+    font-weight: 600;
+    line-height: 1;
+  }
+
+  .metric-number-accent {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* 3D Text Flip Link */
+  .flip-link {
+    perspective: 1000px;
+    display: inline-block;
+    height: 1.2em;
+    overflow: hidden;
+    cursor: pointer;
+  }
+
+  .flip-link-inner {
+    display: block;
+    transition: transform 0.5s cubic-bezier(0.76, 0, 0.24, 1);
+    transform-style: preserve-3d;
+    transform-origin: 50% 50% -0.6em;
+  }
+
+  .flip-link:hover .flip-link-inner {
+    transform: rotateX(90deg);
+  }
+
+  .flip-link-text {
+    display: block;
+    font-size: 14px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6D6D6D;
+    line-height: 1.2em;
+    backface-visibility: hidden;
+  }
+
+  .flip-link-text-back {
+    display: block;
+    font-size: 14px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    line-height: 1.2em;
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform: rotateX(-90deg);
+    transform-origin: 50% 50% -0.6em;
+    backface-visibility: hidden;
+  }
+
+  /* Gradient border badge */
+  .gradient-border-badge {
+    background: linear-gradient(#050505, #050505) padding-box,
+                linear-gradient(135deg, #667eea, #764ba2) border-box;
+    border: 2px solid transparent;
+  }
+
+  /* Table styles */
+  .data-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .data-table th {
+    background: #111111;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 400;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #C8C8C8;
+    padding: 16px 20px;
+    text-align: left;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .data-table td {
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 14px;
+    color: #FFFFFF;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  .data-table tr {
+    transition: background 0.2s ease;
+  }
+
+  .data-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .data-table .best-row {
+    background: rgba(102, 126, 234, 0.08);
+    border-left: 3px solid #667eea;
+  }
+
+  /* Timeline */
+  .timeline-line {
+    width: 2px;
+    background: linear-gradient(to bottom, #4ECDC4, #667eea, #764ba2, #FF6B6B);
+  }
+
+  /* Reference row */
+  .reference-row {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding: 20px 0;
+    transition: background 0.2s ease;
+  }
+
+  .reference-row:hover {
+    background: rgba(255, 255, 255, 0.02);
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+}

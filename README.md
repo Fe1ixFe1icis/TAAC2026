@@ -1,6 +1,7 @@
 <div align="center">
 
 # 🎯 TAAC 2026 CTR 预估模型
+=======
 
 [![AUC](https://img.shields.io/badge/AUC-0.7741-brightgreen?style=for-the-badge&logo=target)](https://github.com/Fe1ixFe1icis/TAAC2026)
 [![Python](https://img.shields.io/badge/Python-3.11-blue?style=for-the-badge&logo=python)](https://python.org)
@@ -8,7 +9,6 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
 
 **统一 Token 流架构的点击率预估方案**
-
 
 </div>
 
@@ -174,6 +174,8 @@ AUC 提升时间线
 ---
 
 ## 🔧 Quick Start
+=======
+
 
 ### 环境安装
 
@@ -190,6 +192,8 @@ pip install -e ".[dev,cuda126]"
 ```
 
 ### Training
+=======
+
 
 ```bash
 # 最佳配置 (AUC=0.7741)
@@ -206,6 +210,7 @@ uv run taac-train \
 ```
 
 ### Evaluation
+=======
 
 ```bash
 uv run taac-eval \
@@ -217,6 +222,7 @@ uv run taac-eval \
 ---
 
 ## 📁 Structure
+=======
 
 ```
 TAAC2026/
@@ -249,6 +255,7 @@ TAAC2026/
 ## 📚 参考文献
 
 ### 工作基于
+=======
 
 1. **TokenMixer-Large** (ByteDance, 2026)
    - *Scaling Up Large Ranking Models in Industrial Recommenders*

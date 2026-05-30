@@ -37,11 +37,12 @@ from taac2026.infrastructure.logging import logger
 
 # TokenFormer-specific hyperparameters (not in standard PCVRModelConfig)
 TOKENFORMER_EXTRA_KWARGS = {
-    "num_full_attn_layers": 2,   # L_f: bottom 2 layers full attention
-    'swa_windows': [64, 32],     # L_s: top 2 layers SWA (E1/E2 最佳)
+    "num_full_attn_layers": 3,   # P2: Increased from 2 to 3 (for num_blocks=6)
+    'swa_windows': [64, 32, 16], # L_s: top 3 layers SWA (shrinking windows)
     "per_field": True,           # Per-field tokenization with ResSwiGLU + Gating
     "max_position": 4096,        # RoPE cache size
     "mixed_params": False,       # OneTrans: 关闭 (E4 性价比不高)
+    "small_init": True,          # P0: Down-matrix small initialization
 }
 
 
@@ -99,7 +100,7 @@ TRAIN_DEFAULTS = PCVRTrainConfig(
         d_model=64,
         emb_dim=64,
         num_queries=1,
-        num_blocks=4,
+        num_blocks=6,               # P2: Increased from 4 to 6
         num_heads=4,
         seq_encoder_type="swiglu",
         hidden_mult=4,
