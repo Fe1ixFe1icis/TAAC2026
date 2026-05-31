@@ -86,6 +86,102 @@ class SwiGLUFFN(nn.Module):
         return self.w3(F.silu(self.w1(x)) * self.w2(x))
 
 
+class SparsePerTokenMoE(nn.Module):
+    """P4: Sparse Per-token Mixture-of-Experts (TokenMixer-Large).
+
+    Each token is routed to top-k experts via a learned router.
+    Expert outputs are weighted and combined.
+
+    Args:
+        d_model: model dimension.
+        num_experts: number of expert FFNs.
+        top_k: number of experts per token.
+        hidden_mult: FFN hidden dimension multiplier.
+        small_init: use down-matrix small initialization.
+        depth: model depth for small_init scaling.
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        num_experts: int = 8,
+        top_k: int = 2,
+        hidden_mult: int = 4,
+        small_init: bool = False,
+        depth: int = 1,
+    ) -> None:
+        super().__init__()
+        self.num_experts = num_experts
+        self.top_k = top_k
+        self.d_model = d_model
+
+        # Router: linear projection to num_experts
+        self.router = nn.Linear(d_model, num_experts, bias=False)
+        nn.init.normal_(self.router.weight, mean=0.0, std=0.02)
+
+        # Expert FFNs
+        self.experts = nn.ModuleList([
+            SwiGLUFFN(d_model, hidden_mult, small_init=small_init, depth=depth)
+            for _ in range(num_experts)
+        ])
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: (B, N, D)
+        Returns:
+            output: (B, N, D)
+        """
+        B, N, D = x.shape
+
+        # Router logits: (B, N, num_experts)
+        router_logits = self.router(x)
+
+        # Select top-k experts per token
+        # weights: (B, N, top_k), indices: (B, N, top_k)
+        weights, indices = torch.topk(F.softmax(router_logits, dim=-1), self.top_k, dim=-1)
+
+        # Normalize weights within top-k
+        weights = weights / (weights.sum(dim=-1, keepdim=True) + 1e-9)
+
+        # Initialize output
+        output = torch.zeros_like(x)
+
+        # Efficient routing: group tokens by expert
+        # For each expert, find which tokens route to it
+        for e_idx in range(self.num_experts):
+            # mask: (B, N, top_k) bool — which top-k slots select expert e_idx
+            mask = (indices == e_idx)  # (B, N, top_k)
+            if not mask.any():
+                continue
+
+            # For each token, get the weight for this expert (if selected)
+            # expert_weight: (B, N, 1)
+            expert_weight = (weights * mask.float()).sum(dim=-1, keepdim=True)
+
+            # Which tokens have this expert in their top-k
+            token_mask = mask.any(dim=-1)  # (B, N)
+
+            if token_mask.any():
+                # Flatten and select tokens for this expert
+                x_flat = x.view(-1, D)  # (B*N, D)
+                token_mask_flat = token_mask.view(-1)  # (B*N,)
+                expert_input = x_flat[token_mask_flat]  # (num_selected, D)
+
+                # Run expert
+                expert_out = self.experts[e_idx](expert_input)  # (num_selected, D)
+
+                # Weighted output
+                weight_flat = expert_weight.view(-1, 1)  # (B*N, 1)
+                expert_weighted = expert_out * weight_flat[token_mask_flat]  # (num_selected, D)
+
+                # Scatter back to output
+                out_flat = output.view(-1, D)
+                out_flat[token_mask_flat] += expert_weighted
+
+        return output
+
+
 class PerFieldResSwiGLUTokenizer(nn.Module):
     """Per-field tokenization with Residual SwiGLU + Gating per token.
 
@@ -226,6 +322,8 @@ class TokenFormerBlock(nn.Module):
         num_V: int = 1,
         small_init: bool = False,
         depth: int = 1,
+        num_experts: int = 0,
+        top_k: int = 2,
     ) -> None:
         super().__init__()
         assert d_model % num_heads == 0, "d_model must be divisible by num_heads"
@@ -273,8 +371,14 @@ class TokenFormerBlock(nn.Module):
         nn.init.zeros_(self.W_g.weight)
         nn.init.zeros_(self.W_g.bias)
 
-        # P0: Pass small_init and depth to SwiGLUFFN
-        self.ffn = SwiGLUFFN(d_model, hidden_mult, small_init=small_init, depth=depth)
+        # P4: Sparse Per-token MoE or standard SwiGLU FFN
+        if num_experts > 1:
+            self.ffn = SparsePerTokenMoE(
+                d_model, num_experts=num_experts, top_k=top_k,
+                hidden_mult=hidden_mult, small_init=small_init, depth=depth,
+            )
+        else:
+            self.ffn = SwiGLUFFN(d_model, hidden_mult, small_init=small_init, depth=depth)
 
     def _build_attn_mask(
         self,
@@ -511,6 +615,15 @@ class TokenFormerModel(nn.Module):
         flash_attention_backend: str = 'torch',
         rms_norm_backend: str = 'torch',
         rms_norm_block_rows: int = 1,
+        # --- TokenMixer-Large optimization parameters ---
+        small_init: bool = False,
+        num_experts: int = 0,
+        top_k: int = 2,
+        aux_weight: float = 0.0,
+        recon_weight: float = 0.0,
+        contrast_weight: float = 0.0,
+        contrast_dim: int = 64,
+        contrast_temperature: float = 0.07,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -539,7 +652,14 @@ class TokenFormerModel(nn.Module):
         self.action_num = action_num
         self.max_position = max_position
         self.mixed_params = mixed_params
-        self.small_init = kwargs.get("small_init", False)
+        self.small_init = small_init
+        self.num_experts = num_experts
+        self.top_k = top_k
+        self._aux_weight = aux_weight
+        self.recon_weight = recon_weight
+        self.contrast_weight = contrast_weight
+        self.contrast_dim = contrast_dim
+        self.contrast_temperature = contrast_temperature
 
         # Compose PCVRHyFormer for embedding paths
         self._inner = PCVRHyFormer(
@@ -692,6 +812,8 @@ class TokenFormerModel(nn.Module):
                 num_V=self._mp_num_V,
                 small_init=self.small_init,
                 depth=num_blocks,
+                num_experts=self.num_experts,
+                top_k=self.top_k,
             ))
         self.blocks = nn.ModuleList(blocks)
 
@@ -704,6 +826,23 @@ class TokenFormerModel(nn.Module):
             nn.Dropout(dropout_rate),
             nn.Linear(d_model, action_num),
         )
+
+        # P5: Feature Reconstruction head for multi-task learning
+        # Reconstructs masked user_dense features from pooled representation
+        self._mp_user_dense_dim = user_dense_dim
+        self.recon_head = nn.Sequential(
+            nn.Linear(d_model, d_model * 2),
+            nn.SiLU(),
+            nn.Linear(d_model * 2, user_dense_dim),
+        )
+
+        # P6: Contrastive Learning projection head
+        if self.contrast_weight > 0:
+            self.contrast_head = nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.SiLU(),
+                nn.Linear(d_model, self.contrast_dim),
+            )
 
         # MLM-compat schema attributes (not available in baseline PCVRHyFormer)
         self._schema_user_int = None
@@ -737,7 +876,7 @@ class TokenFormerModel(nn.Module):
     ) -> torch.Tensor:
         """Build user_dense token with ResSwiGLU residual."""
         inner = self._inner
-        tok = inner._build_user_dense_tok(user_dense_feats, user_int_feats)
+        tok = F.silu(inner.user_dense_proj(user_dense_feats)).unsqueeze(1)
         return tok + self.user_dense_res_ffn(self.user_dense_res_norm(tok))
 
     def _build_F_tokens(
@@ -953,8 +1092,15 @@ class TokenFormerModel(nn.Module):
 
     def _run(
         self, inputs: ModelInput, apply_mask: bool,
+        return_intermediates: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, Dict[str, Any]]:
-        """Shared body for forward/predict."""
+        """Shared body for forward/predict.
+
+        Args:
+            inputs: ModelInput
+            apply_mask: whether to apply feature masking
+            return_intermediates: if True, collect intermediate layer outputs for aux loss
+        """
         F_tokens, ns_unk_masks, item_int_masked = self._build_F_tokens(inputs, apply_mask=apply_mask)
         T_tokens, T_padding, T_positions, unk_masks_per_domain = self._build_T_tokens(inputs)
         V_tokens = self._build_V_tokens(inputs, item_int_masked, F_tokens=F_tokens)
@@ -969,6 +1115,9 @@ class TokenFormerModel(nn.Module):
         # Save residual every interval layers for cross-layer connection
         residual_stack = []
         interval = 2  # Every 2 layers
+
+        # P3: Collect intermediate outputs for auxiliary loss
+        intermediate_outputs = [] if return_intermediates else None
 
         for i, block in enumerate(self.blocks):
             # Save residual at start of interval
@@ -989,6 +1138,13 @@ class TokenFormerModel(nn.Module):
             if i > 0 and i % interval == interval - 1 and residual_stack:
                 X = X + residual_stack.pop()
 
+            # P3: Save intermediate output from selected layers
+            if return_intermediates and (i == 1 or i == 3 or i == len(self.blocks) - 1):
+                V_slice_mid = X[:, v_start:v_end, :]
+                pooled_mid = V_slice_mid.mean(dim=1)
+                pooled_mid = self.output_norm(pooled_mid)
+                intermediate_outputs.append(pooled_mid)
+
         V_slice = X[:, v_start:v_end, :]
         pooled = V_slice.mean(dim=1)
         pooled = self.output_norm(pooled)
@@ -1003,17 +1159,231 @@ class TokenFormerModel(nn.Module):
             '_curr_masks': None,
             '_raw_parts': None,
         }
+
+        # P3: Attach intermediate outputs for auxiliary loss
+        if return_intermediates and intermediate_outputs:
+            extras['_intermediate_outputs'] = intermediate_outputs
+
         return logits, pooled, extras
 
     def forward(self, inputs: ModelInput):
         """Training: returns logits. Eval: returns logits only."""
-        logits, _pooled, extras = self._run(inputs, apply_mask=self.training)
+        # Clear previous aux losses
+        self.clear_aux_losses()
+
+        # P3: Use return_intermediates if aux_weight is set
+        aux_weight = getattr(self, '_aux_weight', 0.0)
+        return_intermediates = self.training and aux_weight > 0
+
+        logits, pooled, extras = self._run(
+            inputs, apply_mask=self.training, return_intermediates=return_intermediates
+        )
+
+        # P3: Self-supervised layer diversity loss (no labels needed)
+        if self.training and aux_weight > 0:
+            if '_intermediate_outputs' in extras:
+                diversity_loss = self.compute_layer_diversity_loss(
+                    extras['_intermediate_outputs']
+                )
+                self.set_aux_loss('aux', diversity_loss * aux_weight)
+
+        # P5: Feature reconstruction auxiliary loss (no labels needed)
+        if self.training and hasattr(self, 'recon_weight') and self.recon_weight > 0:
+            user_dense_feats = inputs.user_dense_feats  # (B, user_dense_dim)
+            recon_pred = self.recon_head(pooled)  # (B, user_dense_dim)
+            # Normalize by feature dimension to avoid large MSE values
+            recon_loss = F.mse_loss(recon_pred, user_dense_feats, reduction='mean')
+            recon_loss = recon_loss / max(self._mp_user_dense_dim, 1)
+            self.set_aux_loss('recon', recon_loss * self.recon_weight)
+
+        # P6: Contrastive Learning - simple in-batch contrastive loss
+        if self.training and hasattr(self, 'contrast_weight') and self.contrast_weight > 0:
+            contrast_loss = self.compute_contrastive_loss(pooled)
+            self.set_aux_loss('contrast', contrast_loss * self.contrast_weight)
+
         return logits
 
     def predict(self, inputs: ModelInput) -> Tuple[torch.Tensor, torch.Tensor]:
         """Inference: returns (logits, pooled_embedding)."""
         logits, pooled, _ = self._run(inputs, apply_mask=False)
         return logits, pooled
+
+    def forward_with_aux(self, inputs: ModelInput, labels: torch.Tensor, aux_weight: float = 0.1):
+        """P3: Training with auxiliary loss from intermediate layers (supervised version).
+
+        Requires labels. For trainer integration, use pcvr_loss_terms() approach.
+        """
+        logits, pooled, extras = self._run(
+            inputs, apply_mask=self.training, return_intermediates=True
+        )
+
+        # Final loss
+        final_loss = F.binary_cross_entropy_with_logits(
+            logits.squeeze(-1), labels.float(), reduction='mean'
+        )
+
+        # Auxiliary losses from intermediate layers
+        aux_losses = []
+        if '_intermediate_outputs' in extras:
+            for mid_output in extras['_intermediate_outputs']:
+                mid_logits = self.clsfier(mid_output)
+                aux_loss = F.binary_cross_entropy_with_logits(
+                    mid_logits.squeeze(-1), labels.float(), reduction='mean'
+                )
+                aux_losses.append(aux_loss)
+
+        # Combine losses
+        if aux_losses:
+            total_aux_loss = sum(aux_losses) / len(aux_losses)
+            total_loss = final_loss + aux_weight * total_aux_loss
+        else:
+            total_loss = final_loss
+
+        extras['_aux_enabled'] = True
+        extras['_aux_weight'] = aux_weight
+        extras['_final_loss'] = final_loss.item()
+        extras['_aux_loss'] = total_aux_loss.item() if aux_losses else 0.0
+
+        return total_loss, logits, extras
+
+    def compute_layer_diversity_loss(self, intermediates: List[torch.Tensor]) -> torch.Tensor:
+        """P3: Self-supervised diversity loss between intermediate layer outputs.
+
+        Encourages different layers to produce diverse representations.
+        This does not require labels and can be used in forward().
+        """
+        if len(intermediates) < 2:
+            return torch.tensor(0.0, device=intermediates[0].device)
+
+        # Normalize representations
+        normalized = [F.normalize(h, dim=-1) for h in intermediates]
+
+        # Compute pairwise similarities
+        diversity_loss = torch.tensor(0.0, device=intermediates[0].device)
+        count = 0
+        for i in range(len(normalized)):
+            for j in range(i + 1, len(normalized)):
+                # Cosine similarity: higher means more similar
+                sim = (normalized[i] * normalized[j]).sum(dim=-1).mean()
+                # Loss: penalize high similarity (encourage diversity)
+                # Use (1 - sim) to encourage orthogonality, but clip to avoid negative
+                diversity_loss = diversity_loss + torch.clamp(sim, min=0.0, max=1.0)
+                count += 1
+
+        return diversity_loss / max(count, 1)
+
+    def compute_contrastive_loss(self, pooled: torch.Tensor) -> torch.Tensor:
+        """P6: Simple in-batch contrastive loss (InfoNCE-like).
+
+        Treats samples in the same batch as negatives.
+        This is a simplified version without explicit data augmentation.
+
+        Args:
+            pooled: (B, D) pooled representations
+
+        Returns:
+            contrastive loss scalar
+        """
+        if not hasattr(self, 'contrast_head'):
+            return torch.tensor(0.0, device=pooled.device)
+
+        # Project to contrastive space
+        z = F.normalize(self.contrast_head(pooled), dim=-1)  # (B, contrast_dim)
+
+        # Compute similarity matrix
+        sim_matrix = torch.matmul(z, z.t()) / self.contrast_temperature  # (B, B)
+
+        # Mask out self-similarity
+        mask = torch.eye(sim_matrix.size(0), device=sim_matrix.device).bool()
+        sim_matrix = sim_matrix.masked_fill(mask, float('-inf'))
+
+        # For each sample, positives are other samples in the batch
+        # Simplified: treat all other samples as positives (this is a simplification)
+        # In practice, you would use labels to define positives/negatives
+        # Here we use a simpler approach: maximize similarity to all other samples
+        # while minimizing similarity to self (already masked out)
+
+        # InfoNCE: for each i, loss = -log(exp(sim(i,j)) / sum_k(exp(sim(i,k))))
+        # where j is a positive sample
+        # Since we don't have explicit positives, we use all other samples
+        # This encourages the model to produce similar representations for all samples
+        # which is not ideal but serves as a regularizer
+
+        # Simplified contrastive loss: uniformity regularizer
+        # Encourage representations to be uniformly distributed on the hypersphere
+        # Loss = -mean(log(sum(exp(sim(i,j)) for j!=i) / sum(exp(sim(i,k)) for k!=i)))
+        # This simplifies to 0, so we use a different approach:
+        # Maximize pairwise distances (minimize similarities)
+        exp_sim = torch.exp(sim_matrix)
+        # For each sample, the "positive" is the average of all other samples
+        # Loss = -log(exp(mean_sim) / sum(exp(sim)))
+        mean_sim = sim_matrix.mean(dim=1)  # (B,)
+        sum_exp = exp_sim.sum(dim=1)  # (B,)
+        loss = -torch.log(torch.exp(mean_sim) / (sum_exp + 1e-8)).mean()
+
+        return loss
+
+    def forward_with_recon(self, inputs: ModelInput, labels: torch.Tensor):
+        """P5: Training with feature reconstruction auxiliary task.
+
+        Reconstructs user_dense features from pooled representation.
+        This acts as a regularizer and helps the model learn better
+        feature representations.
+
+        Args:
+            inputs: ModelInput
+            labels: ground truth labels (B,)
+
+        Returns:
+            total_loss: combined BCE + reconstruction loss
+            logits: final output logits
+            extras: dict with reconstruction loss info
+        """
+        logits, pooled, extras = self._run(inputs, apply_mask=self.training)
+
+        # Main CTR loss
+        ctr_loss = F.binary_cross_entropy_with_logits(
+            logits.squeeze(-1), labels.float(), reduction='mean'
+        )
+
+        # Reconstruction loss
+        recon_loss = torch.tensor(0.0, device=logits.device)
+        if self.training and self.recon_weight > 0:
+            # Reconstruct user_dense features
+            user_dense_feats = inputs.user_dense  # (B, user_dense_dim)
+            recon_pred = self.recon_head(pooled)  # (B, user_dense_dim)
+            recon_loss = F.mse_loss(recon_pred, user_dense_feats, reduction='mean')
+
+        # Combine losses
+        total_loss = ctr_loss + self.recon_weight * recon_loss
+
+        extras['_recon_enabled'] = True
+        extras['_recon_weight'] = self.recon_weight
+        extras['_ctr_loss'] = ctr_loss.item()
+        extras['_recon_loss'] = recon_loss.item()
+
+        return total_loss, logits, extras
+
+    # P3/P5: Store auxiliary losses for trainer to pick up via pcvr_loss_terms()
+    def set_aux_loss(self, loss_name: str, loss_value: torch.Tensor) -> None:
+        """Store an auxiliary loss term to be included in total loss."""
+        if not hasattr(self, '_aux_loss_storage'):
+            self._aux_loss_storage: Dict[str, torch.Tensor] = {}
+        self._aux_loss_storage[loss_name] = loss_value
+
+    def clear_aux_losses(self) -> None:
+        """Clear stored auxiliary losses."""
+        if hasattr(self, '_aux_loss_storage'):
+            self._aux_loss_storage.clear()
+
+    def pcvr_loss_terms(self) -> Dict[str, torch.Tensor]:
+        """Return auxiliary loss terms for the trainer to include.
+
+        This is called by compute_pcvr_loss() when loss config includes
+        model-type terms.
+        """
+        storage = getattr(self, '_aux_loss_storage', {})
+        return storage
 
 
 # Export

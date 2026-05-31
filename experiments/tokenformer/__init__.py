@@ -43,6 +43,13 @@ TOKENFORMER_EXTRA_KWARGS = {
     "max_position": 4096,        # RoPE cache size
     "mixed_params": False,       # OneTrans: 关闭 (E4 性价比不高)
     "small_init": True,          # P0: Down-matrix small initialization
+    "num_experts": 8,            # P4: Sparse MoE experts
+    "top_k": 2,                  # P4: Per-token top-k expert selection
+    "aux_weight": 0.01,          # P3: Auxiliary loss weight (small to avoid dominating)
+    "recon_weight": 0.01,        # P5: Feature reconstruction weight (small to avoid dominating)
+    "contrast_weight": 0.01,     # P6: Contrastive learning weight
+    "contrast_dim": 64,          # P6: Contrastive projection dimension
+    "contrast_temperature": 0.07, # P6: Contrastive temperature
 }
 
 
@@ -89,7 +96,12 @@ TRAIN_DEFAULTS = PCVRTrainConfig(
         compile=False,
         progress_log_interval_steps=100,
     ),
-    loss=PCVRLossConfig(terms=(PCVRLossTermConfig(name="bce", kind="bce", weight=1.0),)),
+    loss=PCVRLossConfig(terms=(
+        PCVRLossTermConfig(name="bce", kind="bce", weight=1.0),
+        PCVRLossTermConfig(name="aux", kind="model", weight=0.01),     # P3: Auxiliary loss
+        PCVRLossTermConfig(name="recon", kind="model", weight=0.01),   # P5: Reconstruction loss
+        PCVRLossTermConfig(name="contrast", kind="model", weight=0.01), # P6: Contrastive loss
+    )),
     sparse_optimizer=PCVRSparseOptimizerConfig(
         sparse_lr=0.05,
         sparse_weight_decay=0.0,
@@ -120,21 +132,31 @@ TRAIN_DEFAULTS = PCVRTrainConfig(
         grouping_strategy="explicit",
         user_groups={
             "U1": [1],
-            "U2": [2, 3, 4, 5],
-            "U3": [6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-            "U4": [16, 17, 18, 19, 20, 21, 22, 23, 24, 25],
-            "U5": [26, 27, 28, 29, 30],
-            "U6": [31],
+            "U2": [2],
+            "U3": [3],
+            "U4": [4],
+            "U5": [5],
         },
         item_groups={
             "I1": [1],
-            "I2": [2, 3, 4, 5, 6, 7, 8],
-            "I3": [9, 10, 11, 12, 13],
-            "I4": [14, 15],
+            "I2": [2],
+            "I3": [3],
+            "I4": [4],
+            "I5": [5],
+            "I6": [6],
+            "I7": [7],
+            "I8": [8],
+            "I9": [9],
+            "I10": [10],
+            "I11": [11],
+            "I12": [12],
+            "I13": [13],
+            "I14": [14],
+            "I15": [15],
         },
         tokenizer_type="rankmixer",
-        user_tokens=6,
-        item_tokens=4,
+        user_tokens=5,
+        item_tokens=15,
     ),
 )
 

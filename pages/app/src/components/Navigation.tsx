@@ -62,7 +62,7 @@ export default function Navigation() {
           onClick={() => handleNavClick('#hero')}
           className="font-mono text-sm font-medium text-white tracking-wider hover:text-gradient transition-colors"
         >
-          TF
+          TAAC2026
         </button>
 
         {/* Desktop Nav Links */}
