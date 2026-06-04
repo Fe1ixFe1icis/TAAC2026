@@ -108,6 +108,7 @@ def default_build_train_model(
     extra_kwargs = {
         k: v for k, v in context.config.items()
         if k not in standard_keys and not k.startswith(("data_", "optimizer_", "runtime_", "sparse_", "ns_", "ema_", "validation_", "loss_"))
+        and k not in ("user_ns_groups", "item_ns_groups")
     }
     if extra_kwargs:
         logger.info("Extra model kwargs: {}", extra_kwargs)

@@ -624,6 +624,11 @@ class TokenFormerModel(nn.Module):
         contrast_weight: float = 0.0,
         contrast_dim: int = 64,
         contrast_temperature: float = 0.07,
+        # --- Ablation switches ---
+        use_global_token: bool = True,
+        use_inter_layer_residuals: bool = True,
+        use_swa: bool = True,
+        use_moe: bool = True,
         **kwargs,
     ) -> None:
         super().__init__()
@@ -653,13 +658,16 @@ class TokenFormerModel(nn.Module):
         self.max_position = max_position
         self.mixed_params = mixed_params
         self.small_init = small_init
-        self.num_experts = num_experts
+        self.num_experts = num_experts if use_moe else 0
         self.top_k = top_k
         self._aux_weight = aux_weight
         self.recon_weight = recon_weight
         self.contrast_weight = contrast_weight
         self.contrast_dim = contrast_dim
         self.contrast_temperature = contrast_temperature
+        self.use_global_token = use_global_token
+        self.use_inter_layer_residuals = use_inter_layer_residuals
+        self.use_swa = use_swa
 
         # Compose PCVRHyFormer for embedding paths
         self._inner = PCVRHyFormer(
@@ -762,8 +770,11 @@ class TokenFormerModel(nn.Module):
         nn.init.normal_(self.sep_token, mean=0.0, std=0.02)
 
         # P1: Global Token (CLS-style aggregation)
-        self.global_token = nn.Parameter(torch.zeros(1, 1, d_model))
-        nn.init.normal_(self.global_token, mean=0.0, std=0.02)
+        if self.use_global_token:
+            self.global_token = nn.Parameter(torch.zeros(1, 1, d_model))
+            nn.init.normal_(self.global_token, mean=0.0, std=0.02)
+        else:
+            self.global_token = None
 
         # Position assignments
         self.sep_t_position = num_time_buckets
@@ -798,7 +809,10 @@ class TokenFormerModel(nn.Module):
                 ws = None
                 disc = False
             else:
-                ws = swa_windows[layer_idx - num_full_attn_layers]
+                if self.use_swa:
+                    ws = swa_windows[layer_idx - num_full_attn_layers]
+                else:
+                    ws = None  # Disable SWA, use full attention
                 disc = True
             blocks.append(TokenFormerBlock(
                 d_model=d_model,
@@ -1047,31 +1061,43 @@ class TokenFormerModel(nn.Module):
         num_V = V_tokens.shape[1]
 
         sep_tok = self.sep_token.to(F_tokens.dtype).expand(B, 1, -1)
-        global_tok = self.global_token.to(F_tokens.dtype).expand(B, 1, -1)
 
         # P1: Prepend Global Token: [G | F | SEP | T | SEP | V]
-        X = torch.cat([global_tok, F_tokens, sep_tok, T_tokens, sep_tok, V_tokens], dim=1)
-        N = X.shape[1]
-
-        G_mask = torch.ones((B, 1), dtype=torch.bool, device=device)
-        F_mask = torch.ones((B, num_F), dtype=torch.bool, device=device)
-        sep_mask = torch.ones((B, 1), dtype=torch.bool, device=device)
-        V_mask = torch.ones((B, num_V), dtype=torch.bool, device=device)
-        padding_mask = torch.cat(
-            [G_mask, F_mask, sep_mask, T_padding, sep_mask, V_mask], dim=1
-        )
-
-        G_pos = torch.full((B, 1), self.global_position, dtype=torch.long, device=device)
-        F_pos = torch.zeros((B, num_F), dtype=torch.long, device=device)
-        sep1_pos = torch.full((B, 1), self.sep_t_position, dtype=torch.long, device=device)
-        sep2_pos = torch.full((B, 1), self.sep_v_position, dtype=torch.long, device=device)
-        V_pos = torch.full((B, num_V), self.v_position, dtype=torch.long, device=device)
-        positions = torch.cat(
-            [G_pos, F_pos, sep1_pos, T_positions, sep2_pos, V_pos], dim=1
-        )
-
-        # Adjust v_start/v_end for global token offset (+1)
-        v_start = 1 + num_F + 1 + num_T + 1
+        if self.use_global_token and self.global_token is not None:
+            global_tok = self.global_token.to(F_tokens.dtype).expand(B, 1, -1)
+            X = torch.cat([global_tok, F_tokens, sep_tok, T_tokens, sep_tok, V_tokens], dim=1)
+            G_mask = torch.ones((B, 1), dtype=torch.bool, device=device)
+            G_pos = torch.full((B, 1), self.global_position, dtype=torch.long, device=device)
+            F_pos = torch.zeros((B, num_F), dtype=torch.long, device=device)
+            sep1_pos = torch.full((B, 1), self.sep_t_position, dtype=torch.long, device=device)
+            sep2_pos = torch.full((B, 1), self.sep_v_position, dtype=torch.long, device=device)
+            V_pos = torch.full((B, num_V), self.v_position, dtype=torch.long, device=device)
+            positions = torch.cat(
+                [G_pos, F_pos, sep1_pos, T_positions, sep2_pos, V_pos], dim=1
+            )
+            F_mask = torch.ones((B, num_F), dtype=torch.bool, device=device)
+            sep_mask = torch.ones((B, 1), dtype=torch.bool, device=device)
+            V_mask = torch.ones((B, num_V), dtype=torch.bool, device=device)
+            padding_mask = torch.cat(
+                [G_mask, F_mask, sep_mask, T_padding, sep_mask, V_mask], dim=1
+            )
+            v_start = 1 + num_F + 1 + num_T + 1
+        else:
+            X = torch.cat([F_tokens, sep_tok, T_tokens, sep_tok, V_tokens], dim=1)
+            F_pos = torch.zeros((B, num_F), dtype=torch.long, device=device)
+            sep1_pos = torch.full((B, 1), self.sep_t_position, dtype=torch.long, device=device)
+            sep2_pos = torch.full((B, 1), self.sep_v_position, dtype=torch.long, device=device)
+            V_pos = torch.full((B, num_V), self.v_position, dtype=torch.long, device=device)
+            positions = torch.cat(
+                [F_pos, sep1_pos, T_positions, sep2_pos, V_pos], dim=1
+            )
+            F_mask = torch.ones((B, num_F), dtype=torch.bool, device=device)
+            sep_mask = torch.ones((B, 1), dtype=torch.bool, device=device)
+            V_mask = torch.ones((B, num_V), dtype=torch.bool, device=device)
+            padding_mask = torch.cat(
+                [F_mask, sep_mask, T_padding, sep_mask, V_mask], dim=1
+            )
+            v_start = num_F + 1 + num_T + 1
         v_end = v_start + num_V
         return X, padding_mask, positions, num_F, v_start, v_end
 
@@ -1120,9 +1146,11 @@ class TokenFormerModel(nn.Module):
         intermediate_outputs = [] if return_intermediates else None
 
         for i, block in enumerate(self.blocks):
-            # Save residual at start of interval
-            if i % interval == 0:
-                residual_stack.append(X)
+            # P2: Inter-layer Residuals (TokenMixer-Large)
+            # Save residual every interval layers for cross-layer connection
+            if self.use_inter_layer_residuals:
+                if i % interval == 0:
+                    residual_stack.append(X)
 
             X = block(
                 X,
@@ -1135,8 +1163,9 @@ class TokenFormerModel(nn.Module):
             )
 
             # Add cross-layer residual at end of interval
-            if i > 0 and i % interval == interval - 1 and residual_stack:
-                X = X + residual_stack.pop()
+            if self.use_inter_layer_residuals:
+                if i > 0 and i % interval == interval - 1 and residual_stack:
+                    X = X + residual_stack.pop()
 
             # P3: Save intermediate output from selected layers
             if return_intermediates and (i == 1 or i == 3 or i == len(self.blocks) - 1):
@@ -1188,18 +1217,21 @@ class TokenFormerModel(nn.Module):
                 self.set_aux_loss('aux', diversity_loss * aux_weight)
 
         # P5: Feature reconstruction auxiliary loss (no labels needed)
+        # Only compute if user_dense features exist
         if self.training and hasattr(self, 'recon_weight') and self.recon_weight > 0:
-            user_dense_feats = inputs.user_dense_feats  # (B, user_dense_dim)
-            recon_pred = self.recon_head(pooled)  # (B, user_dense_dim)
-            # Normalize by feature dimension to avoid large MSE values
-            recon_loss = F.mse_loss(recon_pred, user_dense_feats, reduction='mean')
-            recon_loss = recon_loss / max(self._mp_user_dense_dim, 1)
-            self.set_aux_loss('recon', recon_loss * self.recon_weight)
+            if self._mp_user_dense_dim > 0 and inputs.user_dense_feats is not None:
+                user_dense_feats = inputs.user_dense_feats  # (B, user_dense_dim)
+                recon_pred = self.recon_head(pooled)  # (B, user_dense_dim)
+                # Normalize by feature dimension to avoid large MSE values
+                recon_loss = F.mse_loss(recon_pred, user_dense_feats, reduction='mean')
+                recon_loss = recon_loss / max(self._mp_user_dense_dim, 1)
+                self.set_aux_loss('recon', recon_loss * self.recon_weight)
 
         # P6: Contrastive Learning - simple in-batch contrastive loss
         if self.training and hasattr(self, 'contrast_weight') and self.contrast_weight > 0:
             contrast_loss = self.compute_contrastive_loss(pooled)
-            self.set_aux_loss('contrast', contrast_loss * self.contrast_weight)
+            if torch.isfinite(contrast_loss) and contrast_loss > 0:
+                self.set_aux_loss('contrast', contrast_loss * self.contrast_weight)
 
         return logits
 
@@ -1311,15 +1343,18 @@ class TokenFormerModel(nn.Module):
 
         # Simplified contrastive loss: uniformity regularizer
         # Encourage representations to be uniformly distributed on the hypersphere
-        # Loss = -mean(log(sum(exp(sim(i,j)) for j!=i) / sum(exp(sim(i,k)) for k!=i)))
-        # This simplifies to 0, so we use a different approach:
-        # Maximize pairwise distances (minimize similarities)
-        exp_sim = torch.exp(sim_matrix)
-        # For each sample, the "positive" is the average of all other samples
-        # Loss = -log(exp(mean_sim) / sum(exp(sim)))
-        mean_sim = sim_matrix.mean(dim=1)  # (B,)
+        # Mask out -inf values (self-similarity) before computing exp
+        sim_matrix_masked = sim_matrix.masked_fill(~mask, 0.0)  # Replace -inf with 0 for computation
+        exp_sim = torch.exp(sim_matrix_masked)
+        # Only sum over valid entries (non-masked)
         sum_exp = exp_sim.sum(dim=1)  # (B,)
-        loss = -torch.log(torch.exp(mean_sim) / (sum_exp + 1e-8)).mean()
+        # Compute mean over valid entries only
+        valid_count = (~mask).sum(dim=1).float().clamp(min=1.0)  # (B,)
+        mean_sim = sim_matrix_masked.sum(dim=1) / valid_count  # (B,)
+        # Avoid log(0) by adding epsilon
+        loss = -torch.log((torch.exp(mean_sim) + 1e-8) / (sum_exp + 1e-8)).mean()
+        # Clamp to avoid negative loss
+        loss = torch.clamp(loss, min=0.0)
 
         return loss
 

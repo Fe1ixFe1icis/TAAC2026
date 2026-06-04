@@ -1,12 +1,8 @@
-"""TokenFormer experiment: unified token stream for multi-dataset training."""
+"""TokenFormer ablation: without MoE."""
 
 from __future__ import annotations
 
-from dataclasses import fields
 from pathlib import Path
-from typing import Any
-
-import torch
 
 from taac2026.api import (
     PCVRLossConfig,
@@ -33,30 +29,34 @@ from taac2026.application.training.workflow import (
 )
 from taac2026.infrastructure.modeling.model_contract import build_pcvr_model, load_ns_groups
 from taac2026.infrastructure.logging import logger
+from dataclasses import fields
 
 
-# TokenFormer-specific hyperparameters (not in standard PCVRModelConfig)
 TOKENFORMER_EXTRA_KWARGS = {
-    "num_full_attn_layers": 3,   # P2: Increased from 2 to 3 (for num_blocks=6)
-    'swa_windows': [64, 32, 16], # L_s: top 3 layers SWA (shrinking windows)
-    "per_field": True,           # Per-field tokenization with ResSwiGLU + Gating
-    "max_position": 4096,        # RoPE cache size
-    "mixed_params": False,       # OneTrans: 关闭 (E4 性价比不高)
-    "small_init": True,          # P0: Down-matrix small initialization
-    "num_experts": 8,            # P4: Sparse MoE experts
-    "top_k": 2,                  # P4: Per-token top-k expert selection
-    "aux_weight": 0.0,           # P3: Disabled for Avazu (no user_dense)
-    "recon_weight": 0.0,         # P5: Disabled for Avazu (no user_dense)
-    "contrast_weight": 0.0,      # P6: Disabled for stability
-    "contrast_dim": 64,          # P6: Contrastive projection dimension
-    "contrast_temperature": 0.07, # P6: Contrastive temperature
+    "num_full_attn_layers": 3,
+    'swa_windows': [64, 32, 16],
+    "per_field": False,
+    "max_position": 4096,
+    "mixed_params": False,
+    "small_init": True,
+    "num_experts": 8,
+    "top_k": 2,
+    "aux_weight": 0.0,
+    "recon_weight": 0.0,
+    "contrast_weight": 0.0,
+    "contrast_dim": 64,
+    "contrast_temperature": 0.07,
+    "use_global_token": True,
+    "use_inter_layer_residuals": True,
+    "use_swa": True,
+    "use_moe": False,
 }
 
 
 TRAIN_DEFAULTS = PCVRTrainConfig(
     data=PCVRDataConfig(
-        batch_size=512,
-        num_workers=8,
+        batch_size=256,
+        num_workers=4,
         buffer_batches=1,
         train_ratio=1.0,
         valid_ratio=0.1,
@@ -98,10 +98,6 @@ TRAIN_DEFAULTS = PCVRTrainConfig(
     ),
     loss=PCVRLossConfig(terms=(
         PCVRLossTermConfig(name="bce", kind="bce", weight=1.0),
-        # P3/P5/P6 disabled for Avazu (no user_dense, stability)
-        # PCVRLossTermConfig(name="aux", kind="model", weight=0.01),
-        # PCVRLossTermConfig(name="recon", kind="model", weight=0.01),
-        # PCVRLossTermConfig(name="contrast", kind="model", weight=0.01),
     )),
     sparse_optimizer=PCVRSparseOptimizerConfig(
         sparse_lr=0.05,
@@ -113,7 +109,7 @@ TRAIN_DEFAULTS = PCVRTrainConfig(
         d_model=64,
         emb_dim=64,
         num_queries=1,
-        num_blocks=6,               # P2: Increased from 4 to 6
+        num_blocks=6,
         num_heads=4,
         seq_encoder_type="swiglu",
         hidden_mult=4,
@@ -166,7 +162,6 @@ def _tokenformer_build_train_model(
     context: PCVRTrainContext,
     data_bundle: PCVRTrainDataBundle,
 ) -> torch.nn.Module:
-    """Custom build_model hook that injects TokenFormer-specific kwargs."""
     user_ns_groups, item_ns_groups = load_ns_groups(
         data_bundle.dataset,
         context.config,
@@ -181,14 +176,12 @@ def _tokenformer_build_train_model(
         backend=str(context.config.get("flash_attention_backend", "torch")),
     )
 
-    # Merge standard config with TokenFormer extra kwargs
     standard_keys = {f.name for f in fields(PCVRModelConfig)}
     extra_kwargs = {
         k: v for k, v in context.config.items()
         if k not in standard_keys and not k.startswith(("data_", "optimizer_", "runtime_", "sparse_", "ns_", "ema_", "validation_", "loss_"))
         and k not in ("user_ns_groups", "item_ns_groups")
     }
-    # Always inject TokenFormer defaults (can be overridden by CLI)
     for key, default_value in TOKENFORMER_EXTRA_KWARGS.items():
         if key not in extra_kwargs:
             extra_kwargs[key] = default_value
@@ -222,7 +215,7 @@ def _tokenformer_build_train_model(
 
 
 EXPERIMENT = create_pcvr_experiment(
-    name="tokenformer_multi_dataset",
+    name="tokenformer_no_moe",
     package_dir=Path(__file__).resolve().parent,
     model_class_name="TokenFormerModel",
     train_defaults=TRAIN_DEFAULTS,
