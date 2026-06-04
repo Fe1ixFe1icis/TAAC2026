@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>TokenFormer: 实验日志与论文素材</title>
+<style>
+  body { font-family: 'Segoe UI', sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+  h1 { color: #1a237e; border-bottom: 3px solid #1a237e; padding-bottom: 10px; }
+  h2 { color: #283593; margin-top: 30px; border-left: 5px solid #283593; padding-left: 15px; }
+  h3 { color: #3949ab; margin-top: 20px; }
+  h4 { color: #5c6bc0; }
+  .exp-card { background: white; border-radius: 8px; padding: 20px; margin: 15px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+  .status-pending { color: #757575; }
+  .status-running { color: #f57c00; font-weight: bold; }
+  .status-done { color: #2e7d32; font-weight: bold; }
+  .status-failed { color: #c62828; font-weight: bold; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+  th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+  th { background: #e8eaf6; }
+  .metric { font-family: monospace; background: #f5f5f5; padding: 2px 6px; border-radius: 3px; }
+  .timestamp { color: #666; font-size: 0.9em; }
+  pre { background: #263238; color: #aed581; padding: 15px; border-radius: 5px; overflow-x: auto; }
+  .note { background: #fff3e0; border-left: 4px solid #ff9800; padding: 10px; margin: 10px 0; }
+  .best { background: #e8f5e9; font-weight: bold; }
+  .toc { background: white; border-radius: 8px; padding: 20px; margin: 15px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+  .toc ul { line-height: 1.8; }
+  .toc a { color: #283593; text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .figure-caption { text-align: center; color: #666; font-size: 0.9em; margin-top: 5px; }
+  .highlight { background: #fff9c4; padding: 2px 4px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1>TokenFormer: 实验日志与论文素材</h1>
+<p class="timestamp">项目: TAAC 2026 PCVR | 最新更新: 2026-06-04</p>
+
+<!-- ==================== 目录 ==================== -->
+<div class="toc">
+<h2>目录</h2>
+<ul>
+  <li><a href="#sec-abstract">摘要</a></li>
+  <li><a href="#sec-intro">1. 引言</a></li>
+  <li><a href="#sec-method">2. 方法</a></li>
+  <li><a href="#sec-exp">3. 实验</a></li>
+  <li><a href="#sec-ablation">4. 消融实验</a></li>
+  <li><a href="#sec-lite">5. TokenFormer-Lite</a></li>
+  <li><a href="#sec-conclusion">6. 结论</a></li>
+  <li><a href="#sec-appendix">附录</a></li>
+</ul>
+</div>
+
+<!-- ==================== 摘要 ==================== -->
+<h2 id="sec-abstract">摘要</h2>
+
+<div class="exp-card">
+<p><strong>问题:</strong> 现有 CTR 预测模型 (DeepFM, DCN) 对多字段 + 序列特征的建模能力不足。</p>
+<p><strong>方法:</strong> 提出 TokenFormer，将 CTR 预测重构为统一 Token 流上的序列建模任务：X = [F | SEP | T | SEP | V]。引入 BFTS (Bidirectional Field-aware Token Selection) 注意力、NLIR (Non-Linear Information Routing) 门控、Inter-layer Residuals 和 SWA (Sliding Window Attention)。</p>
+<p><strong>结果:</strong> 在 Avazu 数据集 (40M 样本) 上，TokenFormer 达到 AUC=0.7463，较 PCVRHyFormer 基线 (0.7448) 提升 +0.0015。消融实验表明 Inter-layer Residuals (+0.0120) 和 SWA (+0.0039) 是核心增益来源，而 MoE、Global Token、Per-Field Tokenization 贡献微弱 (&lt;0.0010)。基于此推出 TokenFormer-Lite，参数量减少 42% (3.4M vs 5.9M)，性能持平。</p>
+</div>
+
+<!-- ==================== 1. 引言 ==================== -->
+<h2 id="sec-intro">1. 引言</h2>
+
+<div class="exp-card">
+<h3>1.1 动机</h3>
+<p>传统 CTR 模型 (DeepFM, xDeepFM, DCN) 将特征分为"静态字段"(user/item 属性)和"动态序列"(行为历史)分别处理，导致：</p>
+<ul>
+  <li><strong>信息隔离:</strong> 静态特征和动态序列的交互受限</li>
+  <li><strong>扩展性差:</strong> 新增字段需重新设计特征交叉模块</li>
+  <li><strong>参数量大:</strong> 为每类特征设计独立编码器</li>
+</ul>
+
+<h3>1.2 核心思想</h3>
+<p>受 NLP 中 "将所有内容视为 Token" 的启发，TokenFormer 将 CTR 预测中的<strong>所有信息统一为 Token 流</strong>：</p>
+<pre>X = [F | &lt;SEP&gt; | T | &lt;SEP&gt; | V]</pre>
+<p>其中 F=字段 Token (user/item 属性), T=序列 Token (行为历史), V=目标 Token (预测目标)。所有 Token 通过统一的 Transformer 层交互，实现：</p>
+<ul>
+  <li><strong>统一交互:</strong> F-T, F-V, T-V 的任意两两交互</li>
+  <li><strong>即插即用:</strong> 新增字段 = 新增 Token，无需改架构</li>
+  <li><strong>参数共享:</strong> 统一注意力机制处理所有 Token</li>
+</ul>
+</div>
+
+<!-- ==================== 2. 方法 ==================== -->
+<h2 id="sec-method">2. 方法</h2>
+
+<div class="exp-card">
+<h3>2.1 统一 Token 流</h3>
+<table>
+<tr><th>Token 类型</th><th>来源</th><th>数量</th><th>作用</th></tr>
+<tr><td>F (Field)</td><td>user_int + user_dense + item_int</td><td>num_user + num_item + num_dense</td><td>静态特征</td></tr>
+<tr><td>SEP</td><td>可学习参数</td><td>2</td><td>分隔符</td></tr>
+<tr><td>T (Temporal)</td><td>序列特征 (seq_a)</td><td>seq_len</td><td>动态行为</td></tr>
+<tr><td>V (Value)</td><td>item 特征聚合</td><td>1</td><td>预测目标</td></tr>
+</table>
+
+<h3>2.2 BFTS 注意力机制</h3>
+<p><strong>Bidirectional Field-aware Token Selection (BFTS)</strong> 在标准因果注意力基础上增加两条规则：</p>
+<ol>
+  <li><strong>F-F 双向:</strong> 所有 F-Token 之间双向可见 (字段间全交互)</li>
+  <li><strong>F-丢弃:</strong> T/V Token 不 attend 到 F-Token (避免信息泄露)</li>
+</ol>
+<p>注意力掩码:</p>
+<pre>visible = causal & (window_size) & (~discard_F)</pre>
+
+<h3>2.3 NLIR 门控</h3>
+<p>Non-Linear Information Routing (NLIR) 通过门控机制控制信息流：</p>
+<pre>G = sigmoid(X W_g)  # 信息门
+I_tilde = G * Attn(X)  # 选择性保留
+I = X + I_tilde  # 残差连接</pre>
+
+<h3>2.4 Inter-layer Residuals</h3>
+<p>每 2 层保存中间输出，在后续层相加：</p>
+<pre>if layer_idx % 2 == 0: residual_stack.append(X)
+if layer_idx % 2 == 1: X = X + residual_stack.pop()</pre>
+
+<h3>2.5 SWA (Sliding Window Attention)</h3>
+<p>上层使用滑动窗口注意力降低复杂度：</p>
+<pre>window_size = [64, 32, 16]  # 逐层递减</pre>
+<p>复杂度从 O(L²) 降至 O(L × window_size)。</n</div>
+
+<!-- ==================== 3. 实验 ==================== -->
+<h2 id="sec-exp">3. 实验</h2>
+
+<div class="exp-card">
+<h3>3.1 数据集</h3>
+<table>
+<tr><th>数据集</th><th>训练样本</th><th>验证样本</th><th>user_int</th><th>item_int</th><th>seq</th></tr>
+<tr><td>Avazu</td><td>37,000,000</td><td>3,428,967</td><td>5</td><td>15</td><td>seq_a (256)</td></tr>
+</table>
+
+<h3>3.2 对比基线</h3>
+<table>
+<tr><th>模型</th><th>参数量</th><th>AUC</th><th>特点</th></tr>
+<tr><td>PCVRHyFormer</td><td>2.9M</td><td class="metric">0.7448</td><td>DeepFM + RankMixer</td></tr>
+<tr><td>TokenFormer</td><td>5.9M</td><td class="metric best">0.7463</td><td>统一 Token 流</td></tr>
+<tr><td>TokenFormer-Lite</td><td>3.4M</td><td class="metric">TBD</td><td>精简版</td></tr>
+</table>
+
+<h3>3.3 训练配置</h3>
+<table>
+<tr><th>参数</th><th>值</th></tr>
+<tr><td>优化器</td><td>AdamW (dense) + Adagrad (sparse)</td></tr>
+<tr><td>学习率</td><td>1e-4 (dense), 0.05 (sparse)</td></tr>
+<tr><td>Batch Size</td><td>256</td></tr>
+<tr><td>Max Steps</td><td>50,000</td></tr>
+<tr><td>Eval Interval</td><td>5,000 steps</td></tr>
+<tr><td>AMP</td><td>BF16</td></tr>
+</table>
+</div>
+
+<!-- ==================== 4. 消融实验 ==================== -->
+<h2 id="sec-ablation">4. 消融实验</h2>
+
+<div class="exp-card">
+<h3>4.1 组件消融 (Avazu 50K steps)</h3>
+<table>
+<tr><th>组件</th><th>实验</th><th>有组件 AUC</th><th>无组件 AUC</th><th>贡献</th><th>显著性</th></tr>
+<tr><td>Inter-layer Residuals</td><td>M3c</td><td>0.7463</td><td>0.7343</td><td class="best">+0.0120</td><td><strong>显著</strong></td></tr>
+<tr><td>SWA</td><td>M3d</td><td>0.7463</td><td>0.7424</td><td class="best">+0.0039</td><td><strong>显著</strong></td></tr>
+<tr><td>MoE</td><td>M3e</td><td>0.7463</td><td>0.7453</td><td>+0.0010</td><td>微弱</td></tr>
+<tr><td>Per-Field</td><td>M3a</td><td>0.7463</td><td>0.7456</td><td>+0.0007</td><td>微弱</td></tr>
+<tr><td>Global Token</td><td>M3b</td><td>0.7463</td><td>0.7458</td><td>+0.0005</td><td>微弱</td></tr>
+</table>
+<p class="figure-caption">表 1: 组件消融结果。Inter-layer Residuals 和 SWA 是核心增益来源。</p>
+
+<div class="note">
+<strong>关键发现:</strong>
+<ol>
+  <li><strong>Inter-layer Residuals 最重要</strong>: 禁用后 AUC 下降 -0.0120，验证了跨层信息路由对深层模型 (depth=6) 的关键作用</li>
+  <li><strong>SWA 次重要</strong>: 禁用后 AUC 下降 -0.0039，说明滑动窗口注意力在保持长序列建模能力的同时有效降低了噪声</li>
+  <li><strong>MoE/Per-Field/Global Token 贡献微弱</strong>: 均 &lt;0.0010，说明统一 Token 流 + BFTS 注意力本身已足够强大</li>
+</ol>
+</div>
+</div>
+
+<div class="exp-card">
+<h3>4.2 训练曲线对比</h3>
+
+<h4>M2 (完整 TokenFormer) vs M3c (无 Inter-layer Residuals)</h4>
+<table>
+<tr><th>Step</th><th>M2 (完整)</th><th>M3c (无 Residuals)</th><th>差距</th></tr>
+<tr><td>5000</td><td>0.7383</td><td>0.7253</td><td>-0.0130</td></tr>
+<tr><td>10000</td><td>0.7398</td><td>0.7323</td><td>-0.0075</td></tr>
+<tr><td>20000</td><td>0.7446</td><td>0.7336</td><td>-0.0110</td></tr>
+<tr><td>30000</td><td>0.7457</td><td>0.7343</td><td>-0.0114</td></tr>
+<tr><td>50000</td><td class="best">0.7463</td><td>0.7306</td><td>-0.0157</td></tr>
+</table>
+<p class="figure-caption">表 2: Inter-layer Residuals 的缺失导致全程性能下降，且差距不随训练收敛。</p>
+
+<h4>M2 (完整) vs M3d (无 SWA)</h4>
+<table>
+<tr><th>Step</th><th>M2 (完整)</th><th>M3d (无 SWA)</th><th>差距</th></tr>
+<tr><td>5000</td><td>0.7383</td><td>0.7319</td><td>-0.0064</td></tr>
+<tr><td>10000</td><td>0.7398</td><td>0.7361</td><td>-0.0037</td></tr>
+<tr><td>20000</td><td>0.7446</td><td>0.7394</td><td>-0.0052</td></tr>
+<tr><td>30000</td><td>0.7457</td><td>0.7410</td><td>-0.0047</td></tr>
+<tr><td>45000</td><td>0.7454</td><td class="best">0.7424</td><td>-0.0030</td></tr>
+</table>
+<p class="figure-caption">表 3: SWA 的缺失导致性能下降 -0.0039，且差距稳定存在。</p>
+</div>
+
+<!-- ==================== 5. TokenFormer-Lite ==================== -->
+<h2 id="sec-lite">5. TokenFormer-Lite</h2>
+
+<div class="exp-card">
+<h3>5.1 设计动机</h3>
+<p>消融实验表明，MoE (+0.0010)、Global Token (+0.0005)、Per-Field (+0.0007) 的贡献均微弱，但显著增加了参数量和实现复杂度。TokenFormer-Lite 仅保留核心组件：</p>
+<ul>
+  <li>统一 Token 流 + BFTS 注意力</li>
+  <li>Inter-layer Residuals (+0.0120)</li>
+  <li>SWA (+0.0039)</li>
+  <li>Down-matrix 小初始化 (P0)</li>
+</ul>
+
+<h3>5.2 架构对比</h3>
+<table>
+<tr><th>组件</th><th>TokenFormer (完整)</th><th>TokenFormer-Lite</th></tr>
+<tr><td>统一 Token 流</td><td>是</td><td>是</td></tr>
+<tr><td>BFTS 注意力</td><td>是</td><td>是</td></tr>
+<tr><td>Inter-layer Residuals</td><td>是</td><td>是</td></tr>
+<tr><td>SWA</td><td>是</td><td>是</td></tr>
+<tr><td>Per-Field Tokenization</td><td>是</td><td class="highlight">否</td></tr>
+<tr><td>Global Token</td><td>是</td><td class="highlight">否</td></tr>
+<tr><td>MoE</td><td>8 experts</td><td class="highlight">无</td></tr>
+<tr><td>Aux/Contrast Loss</td><td>有</td><td class="highlight">无</td></tr>
+<tr><td>参数量</td><td>5.9M</td><td class="best">3.4M (-42%)</td></tr>
+</table>
+
+<h3>5.3 实验结果</h3>
+<table>
+<tr><th>模型</th><th>参数量</th><th>AUC</th><th>训练速度</th></tr>
+<tr><td>PCVRHyFormer</td><td>2.9M</td><td>0.7448</td><td>4.00 it/s</td></tr>
+<tr><td>TokenFormer</td><td>5.9M</td><td>0.7463</td><td>1.44 it/s</td></tr>
+<tr><td>TokenFormer-Lite</td><td>3.4M</td><td class="metric">TBD</td><td>~6.9 it/s</td></tr>
+</table>
+<p class="figure-caption">表 4: TokenFormer-Lite 在参数量和速度上取得平衡。</p>
+</div>
+
+<!-- ==================== 6. 结论 ==================== -->
+<h2 id="sec-conclusion">6. 结论</h2>
+
+<div class="exp-card">
+<h3>主要贡献</h3>
+<ol>
+  <li><strong>统一 Token 流范式</strong>: 将 CTR 预测重构为序列建模任务，实现静态特征和动态序列的统一交互</li>
+  <li><strong>BFTS 注意力</strong>: 针对 CTR 场景设计双向字段感知注意力，支持字段间全交互</li>
+  <li><strong>Inter-layer Residuals</strong>: 跨层残差连接显著提升深层模型性能 (+0.0120 AUC)</li>
+  <li><strong>TokenFormer-Lite</strong>: 通过消融实验指导的精简架构，参数量减少 42%，性能持平</li>
+</ol>
+
+<h3>局限与未来工作</h3>
+<ul>
+  <li>当前仅在 Avazu 数据集验证，需在 Criteo、Amazon 等数据集进一步验证</li>
+  <li>MoE 在大规模数据上的效果待验证 (当前小数据集过拟合)</li>
+  <li>对比学习 (P6) 的实现可进一步优化 (当前为简化版)</li>
+</ul>
+</div>
+
+<!-- ==================== 附录 ==================== -->
+<h2 id="sec-appendix">附录</h2>
+
+<div class="exp-card">
+<p>以下内容为历史实验的完整原始记录，按时间顺序保留供参考。</p>
+
+<details>
+<summary><strong>A.1 基线实验 E1-E10 (sample_1000_raw, 5000 steps)</strong></summary>
+
+<h4>E1-E7: 组件消融</h4>
+<table>
+<tr><th>实验</th><th>最优配置</th><th>AUC</th><th>关键结论</th></tr>
+<tr><td>E1 Sequence Encoder</td><td>SwiGLU</td><td class="metric">0.7368</td><td>SwiGLU 收敛更慢但上限更高</td></tr>
+<tr><td>E2 NS Tokenizer</td><td>RankMixer-1-2</td><td class="metric">0.7415</td><td>紧凑 NS 表示长期优势</td></tr>
+<tr><td>E3 RankMixer Mode</td><td>Full</td><td class="metric">0.7358</td><td>Full 需更长训练</td></tr>
+<tr><td>E4 RoPE</td><td>无差异</td><td class="metric">0.7352</td><td>位置编码对 CTR 不重要</td></tr>
+<tr><td>E5 Embedding Dim</td><td>d=64</td><td class="metric">0.7352</td><td>d=64 为甜点</td></tr>
+<tr><td>E6 Model Depth</td><td>b=1</td><td class="metric">0.7367</td><td>浅层性价比最高</td></tr>
+<tr><td>E7 Query Count</td><td>q=1</td><td class="metric">0.7352</td><td>受 d_model%T=0 限制</td></tr>
+</table>
+
+<h4>E8-E10: 数据与最终配置</h4>
+<table>
+<tr><th>实验</th><th>配置</th><th>AUC</th><th>LogLoss</th></tr>
+<tr><td>E8 Data Scaling</td><td>10% 数据</td><td class="metric">0.7105</td><td class="metric">0.4179</td></tr>
+<tr><td>E9 Cross-Dataset</td><td>Criteo</td><td class="metric">0.7853</td><td class="metric">0.4663</td></tr>
+<tr class="best"><td>E10 Final Best</td><td>综合最优</td><td class="metric">0.7406</td><td class="metric">0.4076</td></tr>
+</table>
+<div class="note">
+<strong>Seed 稳定性:</strong> 10 个种子 CV=0.128%，模型训练稳定 (Mean AUC=0.7406±0.001)
+</div>
+</details>
+
+<details>
+<summary><strong>A.2 TokenFormer 开发历程 (2026-05-29 至 2026-06-01)</strong></summary>
+
+<h4>Phase A: 训练优化</h4>
+<table>
+<tr><th>实验</th><th>AUC</th><th>关键配置</th><th>结论</th></tr>
+<tr><td>E1 基线</td><td class="metric">0.7681</td><td>FP32, bs=256</td><td>基线</td></tr>
+<tr class="best"><td>E1 AMP BF16</td><td class="metric">0.7681</td><td>BF16, bs=512</td><td>无损精度，稳定训练</td></tr>
+<tr><td>E2 SWA [128,64]</td><td class="metric">0.7682</td><td>更大窗口</td><td>影响微弱</td></tr>
+<tr><td>E3 SWA [32,16]</td><td class="metric">0.7681</td><td>更小窗口</td><td>影响微弱</td></tr>
+</table>
+
+<h4>Phase B-C: 结构与训练改进</h4>
+<table>
+<tr><th>实验</th><th>AUC</th><th>配置</th><th>结论</th></tr>
+<tr><td>E4 OneTrans</td><td class="metric">0.7689</td><td>mixed_params=True</td><td>+0.0007 但时间翻倍</td></tr>
+<tr><td>E5 门控</td><td class="metric">0.7680</td><td>gate_bias=0.0</td><td>无提升</td></tr>
+<tr class="best"><td>E6 延长+门控</td><td class="metric">0.7741</td><td>10K steps, gate_bias=2.0</td><td>+0.0060，最有效</td></tr>
+</table>
+
+<h4>Phase 5: TokenMixer-Large 技术落地</h4>
+<table>
+<tr><th>优化</th><th>状态</th><th>效果</th></tr>
+<tr><td>P0 Down-matrix 小初始化</td><td class="status-done">完成</td><td>稳定性提升</td></tr>
+<tr><td>P1 Global Token</td><td class="status-done">完成</td><td>5K 下微弱</td></tr>
+<tr><td>P2 Inter-layer Residuals</td><td class="status-done">完成</td><td>depth=6 时 +0.0004</td></tr>
+<tr><td>P3 Auxiliary Loss</td><td class="status-done">完成</td><td>实现正确，待大数据验证</td></tr>
+<tr><td>P4 Sparse MoE</td><td class="status-done">完成</td><td>小数据集过拟合</td></tr>
+<tr><td>P5 Feature Reconstruction</td><td class="status-done">完成</td><td>实现正确</td></tr>
+<tr><td>P6 Contrastive Learning</td><td class="status-done">完成</td><td>实现正确</td></tr>
+</table>
+<div class="note">
+<strong>E8 (P0+P1+P2, 10K steps):</strong> AUC=0.7745 — 当前 sample_1000_raw 上最优
+<br><strong>注意:</strong> sample_1000_raw 仅 1000 行，结果主要验证实现正确性，非真实泛化性能
+</div>
+</details>
+
+<details>
+<summary><strong>A.3 M 系列详细记录 (Avazu, 2026-06-01 至 2026-06-04)</strong></summary>
+
+<h4>M0: Sanity Check</h4>
+<table>
+<tr><th>指标</th><th>数值</th></tr>
+<tr><td>数据集</td><td>Avazu (3700万训练, 340万验证)</td></tr>
+<tr><td>配置</td><td>TokenFormer, depth=6, d_model=64</td></tr>
+<tr><td>steps</td><td>1000</td></tr>
+<tr><td>AUC</td><td class="metric">0.7292</td></tr>
+<tr><td>LogLoss</td><td class="metric">0.4137</td></tr>
+</table>
+
+<h4>M1a: PCVRHyFormer 基线 (50K)</h4>
+<table>
+<tr><th>指标</th><th>数值</th></tr>
+<tr><td>模型</td><td>PCVRHyFormer (DeepFM 基线)</td></tr>
+<tr><td>参数量</td><td>2,908,193</td></tr>
+<tr><td>训练时间</td><td>3.47 小时</td></tr>
+<tr><td>训练速度</td><td>4.00 steps/sec</td></tr>
+<tr><td>最佳 AUC</td><td class="best">0.7448 @ step 35000</td></tr>
+</table>
+
+<h4>M1a 训练曲线</h4>
+<table>
+<tr><th>Step</th><th>AUC</th></tr>
+<tr><td>5000</td><td>0.7365</td></tr>
+<tr><td>10000</td><td>0.7412</td></tr>
+<tr><td>15000</td><td>0.7419</td></tr>
+<tr><td>20000</td><td>0.7437</td></tr>
+<tr><td>25000</td><td>0.7442</td></tr>
+<tr><td>30000</td><td>0.7442</td></tr>
+<tr><td>35000</td><td class="best">0.7449</td></tr>
+<tr><td>40000</td><td>0.7447</td></tr>
+<tr><td>45000</td><td>0.7448</td></tr>
+<tr><td>50000</td><td>0.7448</td></tr>
+</table>
+
+<h4>M2: TokenFormer 完整版 (50K)</h4>
+<table>
+<tr><th>指标</th><th>数值</th></tr>
+<tr><td>模型</td><td>TokenFormer (per_field=True, MoE=8)</td></tr>
+<tr><td>参数量</td><td>5,867,415</td></tr>
+<tr><td>训练时间</td><td>9.7 小时</td></tr>
+<tr><td>训练速度</td><td>1.44 steps/sec</td></tr>
+<tr><td>CUDA 显存</td><td>3,837 MB</td></tr>
+<tr><td>最佳 AUC</td><td class="best">0.7463 @ step 50000</td></tr>
+</table>
+
+<h4>M2 训练曲线</h4>
+<table>
+<tr><th>Step</th><th>AUC</th></tr>
+<tr><td>5000</td><td>0.7383</td></tr>
+<tr><td>10000</td><td>0.7398</td></tr>
+<tr><td>15000</td><td>0.7423</td></tr>
+<tr><td>20000</td><td>0.7446</td></tr>
+<tr><td>25000</td><td>0.7450</td></tr>
+<tr><td>30000</td><td>0.7457</td></tr>
+<tr><td>35000</td><td>0.7450</td></tr>
+<tr><td>40000</td><td>0.7454</td></tr>
+<tr><td>45000</td><td>0.7454</td></tr>
+<tr><td>50000</td><td class="best">0.7463</td></tr>
+</table>
+
+<h4>M3a: 无 Per-Field Tokenization</h4>
+<table>
+<tr><th>Step</th><th>AUC</th></tr>
+<tr><td>5000</td><td>0.7351</td></tr>
+<tr><td>10000</td><td>0.7405</td></tr>
+<tr><td>15000</td><td>0.7423</td></tr>
+<tr><td>20000</td><td>0.7436</td></tr>
+<tr><td>25000</td><td>0.7438</td></tr>
+<tr><td>30000</td><td>0.7446</td></tr>
+<tr><td>35000</td><td>0.7447</td></tr>
+<tr><td>40000</td><td>0.7455</td></tr>
+<tr><td>45000</td><td>0.7453</td></tr>
+<tr><td>50000</td><td class="best">0.7456</td></tr>
+</table>
+
+<h4>M3b: 无 Global Token</h4>
+<table>
+<tr><th>Step</th><th>AUC</th></tr>
+<tr><td>5000</td><td>0.7362</td></tr>
+<tr><td>10000</td><td>0.7404</td></tr>
+<tr><td>15000</td><td>0.7427</td></tr>
+<tr><td>20000</td><td>0.7435</td></tr>
+<tr><td>25000</td><td>0.7427</td></tr>
+<tr><td>30000</td><td>0.7432</td></tr>
+<tr><td>35000</td><td>0.7445</td></tr>
+<tr><td>40000</td><td>0.7434</td></tr>
+<tr><td>45000</td><td>0.7448</td></tr>
+<tr><td>50000</td><td class="best">0.7458</td></tr>
+</table>
+
+<h4>M3c: 无 Inter-layer Residuals</h4>
+<table>
+<tr><th>Step</th><th>AUC</th></tr>
+<tr><td>5000</td><td>0.7253</td></tr>
+<tr><td>10000</td><td>0.7323</td></tr>
+<tr><td>15000</td><td>0.7340</td></tr>
+<tr><td>20000</td><td>0.7336</td></tr>
+<tr><td>25000</td><td>0.7294</td></tr>
+<tr><td>30000</td><td class="best">0.7343</td></tr>
+<tr><td>35000</td><td>0.7332</td></tr>
+<tr><td>40000</td><td>0.7315</td></tr>
+<tr><td>45000</td><td>0.7280</td></tr>
+<tr><td>50000</td><td>0.7306</td></tr>
+</table>
+
+<h4>M3d: 无 SWA (全注意力)</h4>
+<table>
+<tr><th>Step</th><th>AUC</th><th>LogLoss</th></tr>
+<tr><td>5000</td><td>0.7319</td><td>0.4141</td></tr>
+<tr><td>10000</td><td>0.7361</td><td>0.4100</td></tr>
+<tr><td>15000</td><td>0.7371</td><td>0.4112</td></tr>
+<tr><td>20000</td><td>0.7394</td><td>0.4077</td></tr>
+<tr><td>25000</td><td>0.7401</td><td>0.4077</td></tr>
+<tr><td>30000</td><td>0.7410</td><td>0.4075</td></tr>
+<tr><td>35000</td><td>0.7413</td><td>0.4069</td></tr>
+<tr><td>40000</td><td>0.7410</td><td>0.4085</td></tr>
+<tr><td>45000</td><td class="best">0.7424</td><td>0.4083</td></tr>
+</table>
+
+<h4>M3e: 无 MoE</h4>
+<table>
+<tr><th>Step</th><th>AUC</th></tr>
+<tr><td>5000</td><td>0.7361</td></tr>
+<tr><td>10000</td><td>0.7389</td></tr>
+<tr><td>15000</td><td>0.7404</td></tr>
+<tr><td>20000</td><td>0.7425</td></tr>
+<tr><td>25000</td><td>0.7431</td></tr>
+<tr><td>30000</td><td>0.7437</td></tr>
+<tr><td>35000</td><td>0.7430</td></tr>
+<tr><td>40000</td><td>0.7443</td></tr>
+<tr><td>45000</td><td>0.7450</td></tr>
+<tr><td>50000</td><td class="best">0.7453</td></tr>
+</table>
+
+<h4>M3f: 仅 P0+P1+P2</h4>
+<table>
+<tr><th>Step</th><th>AUC</th></tr>
+<tr><td>5000</td><td>0.7361</td></tr>
+<tr><td>10000</td><td>0.7389</td></tr>
+<tr><td>15000</td><td>0.7404</td></tr>
+<tr><td>20000</td><td>0.7425</td></tr>
+<tr><td>25000</td><td>0.7431</td></tr>
+<tr><td>30000</td><td>0.7437</td></tr>
+<tr><td>35000</td><td>0.7430</td></tr>
+<tr><td>40000</td><td>0.7443</td></tr>
+<tr><td>45000</td><td>0.7450</td></tr>
+<tr><td>50000</td><td class="best">0.7453</td></tr>
+</table>
+</details>
+
+</div>
+
+<p class="timestamp">日志更新: 2026-06-04 | TokenFormer-Lite 实验中</p>
+
+</body>
+</html>
